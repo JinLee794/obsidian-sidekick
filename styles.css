@@ -1,8 +1,643 @@
-/*
+/* ── Sidekick Chat View ───────────────────────────────────────── */
 
-This CSS file will be included with your plugin, and
-available in the app when your plugin is enabled.
+.sidekick-root {
+	display: flex;
+	flex-direction: column;
+	height: 100%;
+	overflow: hidden;
+	font-family: var(--font-interface);
+}
 
-If your plugin does not need CSS, delete this file.
+/* ── Chat area ────────────────────────────────────────────────── */
 
-*/
+.sidekick-chat {
+	flex: 1 1 auto;
+	overflow-y: auto;
+	padding: 12px 10px;
+	display: flex;
+	flex-direction: column;
+	gap: 6px;
+}
+
+/* Welcome */
+
+.sidekick-welcome {
+	display: flex;
+	flex-direction: column;
+	align-items: center;
+	justify-content: center;
+	text-align: center;
+	padding: 40px 16px;
+	opacity: 0.7;
+	flex: 1;
+}
+
+.sidekick-welcome-icon {
+	margin-bottom: 12px;
+}
+
+.sidekick-welcome-icon svg {
+	width: 48px;
+	height: 48px;
+	color: var(--interactive-accent);
+}
+
+.sidekick-welcome h3 {
+	margin: 0 0 8px;
+	font-size: 1.2em;
+}
+
+.sidekick-welcome-desc {
+	color: var(--text-muted);
+	font-size: var(--font-ui-small);
+	max-width: 280px;
+}
+
+/* ── Messages ─────────────────────────────────────────────────── */
+
+.sidekick-msg {
+	display: flex;
+	padding: 8px 6px;
+	border-radius: var(--radius-m);
+	animation: sidekick-fade-in 0.2s ease;
+}
+
+@keyframes sidekick-fade-in {
+	from { opacity: 0; transform: translateY(4px); }
+	to   { opacity: 1; transform: translateY(0); }
+}
+
+.sidekick-msg-user {
+	flex-direction: row-reverse;
+	gap: 4px;
+	justify-content: flex-start;
+	background: transparent;
+}
+
+.sidekick-msg-user .sidekick-msg-body-wrapper {
+	background: var(--interactive-accent);
+	color: var(--text-on-accent);
+	border-radius: var(--radius-l);
+	border-bottom-right-radius: var(--radius-s);
+	padding: 8px 14px;
+	max-width: 85%;
+}
+
+.sidekick-msg-user .sidekick-msg-body-wrapper a {
+	color: var(--text-on-accent);
+	text-decoration: underline;
+}
+
+.sidekick-msg-assistant {
+	background: transparent;
+}
+
+.sidekick-msg-info {
+	justify-content: center;
+	padding: 4px 8px;
+	font-size: var(--font-ui-smaller);
+	color: var(--text-muted);
+	font-style: italic;
+	background: none;
+}
+
+/* Copy button on user messages */
+.sidekick-msg-copy {
+	flex-shrink: 0;
+	align-self: flex-start;
+	margin-top: 6px;
+	background: none;
+	border: none;
+	padding: 2px;
+	cursor: pointer;
+	color: var(--text-faint);
+	border-radius: var(--radius-s);
+	opacity: 0;
+	transition: opacity 0.15s ease, color 0.15s ease;
+}
+.sidekick-msg-user:hover .sidekick-msg-copy {
+	opacity: 1;
+}
+.sidekick-msg-copy:hover {
+	color: var(--text-muted);
+}
+.sidekick-msg-copy svg {
+	width: 14px;
+	height: 14px;
+}
+
+/* Assistant text is selectable/copyable by default */
+.sidekick-msg-assistant .sidekick-msg-body {
+	user-select: text;
+	-webkit-user-select: text;
+}
+
+.sidekick-msg-body-wrapper {
+	flex: 1;
+	min-width: 0;
+	overflow: hidden;
+}
+
+.sidekick-msg-body {
+	font-size: var(--font-ui-small);
+	line-height: 1.5;
+	word-wrap: break-word;
+	overflow-wrap: break-word;
+}
+
+.sidekick-msg-body p:first-child {
+	margin-top: 0;
+}
+
+.sidekick-msg-body p:last-child {
+	margin-bottom: 0;
+}
+
+.sidekick-msg-body pre {
+	background: var(--background-primary-alt);
+	border-radius: var(--radius-s);
+	padding: 8px;
+	overflow-x: auto;
+	font-size: var(--font-ui-smaller);
+}
+
+.sidekick-msg-body code {
+	font-size: 0.9em;
+}
+
+.sidekick-msg-attachments {
+	display: flex;
+	flex-wrap: wrap;
+	gap: 4px;
+	margin-bottom: 4px;
+}
+
+.sidekick-msg-att-chip {
+	display: inline-flex;
+	align-items: center;
+	gap: 2px;
+	font-size: var(--font-ui-smaller);
+	color: var(--text-muted);
+	background: var(--background-modifier-border);
+	border-radius: var(--radius-s);
+	padding: 1px 6px;
+}
+
+.sidekick-msg-att-chip svg {
+	width: 12px;
+	height: 12px;
+}
+
+/* Tool status */
+
+.sidekick-tool-status {
+	display: flex;
+	align-items: center;
+	gap: 4px;
+	font-size: var(--font-ui-smaller);
+	color: var(--text-accent);
+	padding: 2px 0 4px;
+	animation: sidekick-pulse 1.5s ease-in-out infinite;
+}
+
+.sidekick-tool-status.is-hidden {
+	display: none;
+}
+
+.sidekick-tool-icon svg {
+	width: 14px;
+	height: 14px;
+}
+
+@keyframes sidekick-pulse {
+	0%, 100% { opacity: 1; }
+	50% { opacity: 0.5; }
+}
+
+/* Thinking indicator */
+
+.sidekick-thinking {
+	display: flex;
+	align-items: center;
+	gap: 4px;
+	color: var(--text-muted);
+	font-size: var(--font-ui-small);
+	padding: 4px 0;
+}
+
+.sidekick-thinking-dots {
+	animation: sidekick-pulse 1.2s ease-in-out infinite;
+}
+
+/* ── Bottom panel ─────────────────────────────────────────────── */
+
+.sidekick-bottom {
+	flex-shrink: 0;
+	border-top: 1px solid var(--background-modifier-border);
+	padding: 8px 10px;
+	display: flex;
+	flex-direction: column;
+	gap: 6px;
+	background: var(--background-primary);
+}
+
+/* Attachments bar */
+
+.sidekick-attachments-bar {
+	display: flex;
+	flex-wrap: wrap;
+	align-items: center;
+	gap: 4px;
+}
+
+.sidekick-attachments-bar.is-hidden {
+	display: none;
+}
+
+.sidekick-attachment-tag {
+	display: inline-flex;
+	align-items: center;
+	gap: 3px;
+	background: var(--background-secondary-alt);
+	border-radius: var(--radius-s);
+	padding: 2px 6px;
+	font-size: var(--font-ui-smaller);
+	color: var(--text-normal);
+}
+
+.sidekick-attachment-icon svg {
+	width: 12px;
+	height: 12px;
+}
+
+.sidekick-attachment-name {
+	max-width: 120px;
+	overflow: hidden;
+	text-overflow: ellipsis;
+	white-space: nowrap;
+}
+
+.sidekick-attachment-remove {
+	cursor: pointer;
+	opacity: 0.5;
+	transition: opacity 0.15s;
+}
+
+.sidekick-attachment-remove:hover {
+	opacity: 1;
+}
+
+.sidekick-attachment-remove svg {
+	width: 12px;
+	height: 12px;
+}
+
+/* Scope bar */
+
+.sidekick-scope-bar {
+	display: flex;
+	align-items: center;
+	gap: 6px;
+	font-size: var(--font-ui-smaller);
+	color: var(--text-muted);
+}
+
+.sidekick-scope-bar.is-hidden {
+	display: none;
+}
+
+.sidekick-scope-label {
+	display: flex;
+	align-items: center;
+	gap: 3px;
+}
+
+.sidekick-scope-label svg {
+	width: 14px;
+	height: 14px;
+}
+
+.sidekick-scope-remove {
+	cursor: pointer;
+	opacity: 0.5;
+	transition: opacity 0.15s;
+	display: flex;
+	align-items: center;
+}
+
+.sidekick-scope-remove:hover {
+	opacity: 1;
+}
+
+.sidekick-scope-remove svg {
+	width: 12px;
+	height: 12px;
+}
+
+/* ── Input area ───────────────────────────────────────────────── */
+
+.sidekick-input-area {
+	display: flex;
+	flex-direction: column;
+	gap: 4px;
+	background: var(--background-secondary);
+	border-radius: var(--radius-m);
+	padding: 6px 8px;
+	border: 1px solid var(--background-modifier-border);
+	transition: border-color 0.15s;
+}
+
+.sidekick-input-area:focus-within {
+	border-color: var(--interactive-accent);
+}
+
+.sidekick-input-actions {
+	display: flex;
+	align-items: center;
+	gap: 4px;
+	flex-wrap: wrap;
+}
+
+.sidekick-input-row {
+	display: flex;
+	align-items: flex-end;
+	gap: 6px;
+}
+
+.sidekick-input {
+	flex: 1;
+	border: none;
+	background: transparent;
+	resize: none;
+	outline: none;
+	font-family: var(--font-interface);
+	font-size: var(--font-ui-small);
+	color: var(--text-normal);
+	min-height: 24px;
+	max-height: 200px;
+	line-height: 1.5;
+	padding: 2px 0;
+}
+
+.sidekick-input::placeholder {
+	color: var(--text-faint);
+}
+
+.sidekick-send-btn {
+	flex-shrink: 0;
+	width: 28px;
+	height: 28px;
+	border-radius: var(--radius-s);
+	display: flex;
+	align-items: center;
+	justify-content: center;
+	cursor: pointer;
+	background: var(--interactive-accent) !important;
+	color: var(--text-on-accent) !important;
+	border: none;
+	transition: opacity 0.15s;
+}
+
+.sidekick-send-btn:hover {
+	opacity: 0.85;
+	background: var(--interactive-accent) !important;
+}
+
+.sidekick-send-btn.is-streaming {
+	background: var(--text-error) !important;
+}
+
+.sidekick-send-btn svg {
+	width: 16px;
+	height: 16px;
+	stroke: var(--text-on-accent);
+}
+
+/* ── Config toolbar ───────────────────────────────────────────── */
+
+.sidekick-toolbar {
+	display: flex;
+	align-items: center;
+	gap: 6px;
+	flex-wrap: wrap;
+}
+
+.sidekick-toolbar-group {
+	display: flex;
+	align-items: center;
+	gap: 3px;
+}
+
+.sidekick-toolbar-icon svg {
+	width: 14px;
+	height: 14px;
+	color: var(--text-muted);
+}
+
+.sidekick-select {
+	font-size: var(--font-ui-smaller);
+	padding: 2px 4px;
+	border-radius: var(--radius-s);
+	border: 1px solid var(--background-modifier-border);
+	background: var(--background-primary);
+	color: var(--text-normal);
+	max-width: 140px;
+	cursor: pointer;
+}
+
+.sidekick-toolbar-actions {
+	display: flex;
+	align-items: center;
+	gap: 2px;
+	margin-left: auto;
+}
+
+.sidekick-icon-btn {
+	display: flex;
+	align-items: center;
+	justify-content: center;
+	width: 26px;
+	height: 26px;
+	border-radius: var(--radius-s);
+	border: none;
+	background: transparent;
+	color: var(--text-muted);
+	cursor: pointer;
+	transition: background 0.15s, color 0.15s;
+	padding: 4px;
+}
+
+.sidekick-icon-btn:hover {
+	background: var(--background-modifier-hover);
+	color: var(--text-normal);
+}
+
+.sidekick-icon-btn.is-active {
+	color: var(--interactive-accent);
+}
+
+.sidekick-icon-btn svg {
+	width: 16px;
+	height: 16px;
+	stroke-width: 2px;
+}
+
+/* ── Skills & tools chips (inline in toolbar) ─────────────────── */
+
+.sidekick-toolbar-chips {
+	display: flex;
+	flex-wrap: wrap;
+	gap: 3px;
+	align-items: center;
+}
+
+.sidekick-chips-empty {
+	font-size: var(--font-ui-smaller);
+	color: var(--text-faint);
+	font-style: italic;
+}
+
+.sidekick-chip {
+	display: inline-flex;
+	align-items: center;
+	gap: 3px;
+	padding: 2px 8px;
+	border-radius: 999px;
+	border: 1px solid var(--background-modifier-border);
+	background: transparent;
+	color: var(--text-muted);
+	font-size: var(--font-ui-smaller);
+	cursor: pointer;
+	transition: all 0.15s ease;
+}
+
+.sidekick-chip:hover {
+	border-color: var(--interactive-accent);
+	color: var(--text-normal);
+}
+
+.sidekick-chip.is-active {
+	background: var(--interactive-accent);
+	border-color: var(--interactive-accent);
+	color: var(--text-on-accent);
+}
+
+/* ── Vault scope modal ────────────────────────────────────────── */
+
+.sidekick-scope-modal {
+	max-height: 80vh;
+	overflow: hidden;
+	display: flex;
+	flex-direction: column;
+}
+
+.sidekick-scope-modal h3 {
+	margin: 0 0 10px;
+}
+
+.sidekick-scope-search {
+	width: 100%;
+	padding: 6px 10px;
+	border-radius: var(--radius-s);
+	border: 1px solid var(--background-modifier-border);
+	background: var(--background-primary);
+	color: var(--text-normal);
+	font-size: var(--font-ui-small);
+	margin-bottom: 8px;
+}
+
+.sidekick-scope-tree {
+	flex: 1;
+	overflow-y: auto;
+	max-height: 50vh;
+	border: 1px solid var(--background-modifier-border);
+	border-radius: var(--radius-s);
+	padding: 4px 0;
+}
+
+.sidekick-scope-item {
+	display: flex;
+	align-items: center;
+	gap: 4px;
+	padding: 2px 8px;
+	font-size: var(--font-ui-small);
+	cursor: pointer;
+}
+
+.sidekick-scope-item:hover {
+	background: var(--background-modifier-hover);
+}
+
+.sidekick-scope-toggle {
+	flex-shrink: 0;
+	width: 16px;
+	height: 16px;
+	display: flex;
+	align-items: center;
+	justify-content: center;
+	cursor: pointer;
+	border-radius: var(--radius-s);
+	color: var(--text-muted);
+}
+
+.sidekick-scope-toggle:hover {
+	color: var(--text-normal);
+}
+
+.sidekick-scope-toggle svg {
+	width: 14px;
+	height: 14px;
+}
+
+.sidekick-scope-toggle-spacer {
+	visibility: hidden;
+}
+
+.sidekick-scope-root-name {
+	font-weight: 600;
+}
+
+.sidekick-scope-item input[type="checkbox"] {
+	margin: 0;
+	cursor: pointer;
+}
+
+.sidekick-scope-icon svg {
+	width: 14px;
+	height: 14px;
+	color: var(--text-muted);
+}
+
+.sidekick-scope-name {
+	overflow: hidden;
+	text-overflow: ellipsis;
+	white-space: nowrap;
+}
+
+.sidekick-scope-buttons {
+	display: flex;
+	gap: 8px;
+	justify-content: flex-end;
+	margin-top: 10px;
+}
+
+/* ── Settings page models list ────────────────────────────────── */
+
+.sidekick-models-list {
+	margin: 4px 0;
+}
+
+.sidekick-models-ul {
+	list-style: none;
+	padding: 0;
+	margin: 0;
+}
+
+.sidekick-models-ul li {
+	padding: 2px 0;
+	font-size: var(--font-ui-small);
+}
+
+.sidekick-models-error {
+	color: var(--text-error);
+}

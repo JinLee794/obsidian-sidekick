@@ -11,6 +11,12 @@ import type {
 	SessionListFilter,
 	GetAuthStatusResponse,
 	AssistantMessageEvent,
+	MCPServerConfig,
+	MCPRemoteServerConfig,
+	MCPLocalServerConfig,
+	SessionEvent,
+	SessionEventType,
+	MessageOptions,
 } from '@github/copilot-sdk';
 
 // Available at runtime in the esbuild CJS bundle.
@@ -226,11 +232,21 @@ export class CopilotService {
 	}
 }
 
+export {approveAll};
+
 export type {
+	CopilotSession,
 	ModelInfo,
 	SessionMetadata,
 	ConnectionState,
 	GetAuthStatusResponse,
 	CustomAgentConfig,
 	AssistantMessageEvent,
+	SessionConfig,
+	MCPServerConfig,
+	MCPRemoteServerConfig,
+	MCPLocalServerConfig,
+	SessionEvent,
+	SessionEventType,
+	MessageOptions,
 };

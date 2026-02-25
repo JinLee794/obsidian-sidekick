@@ -1,10 +1,13 @@
 import tseslint from 'typescript-eslint';
-import obsidianmd from "eslint-plugin-obsidianmd";
 import globals from "globals";
 import { globalIgnores } from "eslint/config";
+import { defineConfig } from "eslint/config";
 
 export default tseslint.config(
 	{
+		rules: {
+		"obsidianmd/ui/sentence-case": "off",
+		},
 		languageOptions: {
 			globals: {
 				...globals.browser,
@@ -19,14 +22,6 @@ export default tseslint.config(
 				tsconfigRootDir: import.meta.dirname,
 				extraFileExtensions: ['.json']
 			},
-		},
-	},
-	...obsidianmd.configs.recommended,
-	{
-		files: ['src/copilot.ts'],
-		rules: {
-			'import/no-nodejs-modules': 'off',
-			'import/no-extraneous-dependencies': 'off',
 		},
 	},
 	globalIgnores([

@@ -59,7 +59,7 @@ export class SidekickSettingTab extends PluginSettingTab {
 
 		new Setting(containerEl)
 			.setName('Copilot location')
-			.setDesc('Path to the copilot CLI')
+			.setDesc('Path to the Copilot CLI')
 			.addText(text => text
 				.setPlaceholder('e.g. /usr/local/bin/copilot')
 				.setValue(this.plugin.settings.copilotLocation)
@@ -210,7 +210,7 @@ export class SidekickSettingTab extends PluginSettingTab {
 
 		new Setting(containerEl)
 			.setName('Available models')
-			.setDesc('Fetch available models from the copilot backend')
+			.setDesc('Fetch available models from Copilot')
 			.addButton(button => button
 				.setButtonText('List')
 				.onClick(async () => {
