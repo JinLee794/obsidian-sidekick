@@ -1,5 +1,5 @@
 import {App, normalizePath, TFile, TFolder} from 'obsidian';
-import type {AgentConfig, SkillInfo, McpServerEntry} from './types';
+import type {AgentConfig, SkillInfo, McpServerEntry, PromptConfig} from './types';
 
 /**
  * Parse YAML-like frontmatter from markdown content.
@@ -70,6 +70,30 @@ export async function loadSkills(app: App, skillsFolder: string): Promise<SkillI
 		}
 	}
 	return skills;
+}
+
+/**
+ * Load all prompt templates from *.prompt.md files in the given vault folder.
+ */
+export async function loadPrompts(app: App, promptsFolder: string): Promise<PromptConfig[]> {
+	const folder = normalizePath(promptsFolder);
+	const prompts: PromptConfig[] = [];
+	const abstract = app.vault.getAbstractFileByPath(folder);
+	if (!(abstract instanceof TFolder)) return prompts;
+
+	for (const child of abstract.children) {
+		if (child instanceof TFile && child.extension === 'md' && child.name.endsWith('.prompt.md')) {
+			const content = await app.vault.read(child);
+			const {meta, body} = parseFrontmatter(content);
+			prompts.push({
+				name: child.basename.replace('.prompt', ''),
+				agent: meta['agent'] || undefined,
+				description: meta['description'] || undefined,
+				content: body.trim(),
+			});
+		}
+	}
+	return prompts;
 }
 
 /**

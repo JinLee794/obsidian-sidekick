@@ -24,9 +24,9 @@ import type {
 	PermissionRequest,
 	PermissionRequestResult,
 } from './copilot';
-import type {AgentConfig, SkillInfo, McpServerEntry, ChatMessage, ChatAttachment} from './types';
-import {loadAgents, loadSkills, loadMcpServers} from './configLoader';
-import {getAgentsFolder, getSkillsFolder, getToolsFolder} from './settings';
+import type {AgentConfig, SkillInfo, McpServerEntry, PromptConfig, ChatMessage, ChatAttachment} from './types';
+import {loadAgents, loadSkills, loadMcpServers, loadPrompts} from './configLoader';
+import {getAgentsFolder, getSkillsFolder, getToolsFolder, getPromptsFolder} from './settings';
 import {VaultScopeModal} from './vaultScopeModal';
 
 export const SIDEKICK_VIEW_TYPE = 'sidekick-view';
@@ -249,6 +249,8 @@ export class SidekickView extends ItemView {
 	private models: ModelInfo[] = [];
 	private skills: SkillInfo[] = [];
 	private mcpServers: McpServerEntry[] = [];
+	private prompts: PromptConfig[] = [];
+	private activePrompt: PromptConfig | null = null;
 
 	private selectedAgent = '';
 	private selectedModel = '';
@@ -297,6 +299,10 @@ export class SidekickView extends ItemView {
 	private debugBtnEl!: HTMLElement;
 	private streamingComponent: Component | null = null;
 	private streamingWrapperEl: HTMLElement | null = null;
+
+	// ── Prompt dropdown DOM refs ─────────────────────────────────
+	private promptDropdown: HTMLElement | null = null;
+	private promptDropdownIndex = -1;
 
 	// ── Session sidebar DOM refs ─────────────────────────────────
 	private sidebarEl!: HTMLElement;
@@ -423,12 +429,42 @@ export class SidekickView extends ItemView {
 		this.inputEl.addEventListener('input', () => {
 			this.inputEl.style.height = 'auto';
 			this.inputEl.style.height = Math.min(this.inputEl.scrollHeight, 200) + 'px';
+			this.handlePromptTrigger();
 		});
 
 		// Ctrl+Enter or Enter (without Shift) to send
 		// Register on window in capture phase — earliest interception before Obsidian's hotkey system
 		const keyHandler = (e: KeyboardEvent) => {
 			if (document.activeElement !== this.inputEl) return;
+
+			// Handle prompt dropdown navigation
+			if (this.promptDropdown) {
+				if (e.key === 'ArrowDown') {
+					e.preventDefault();
+					e.stopPropagation();
+					this.navigatePromptDropdown(1);
+					return;
+				}
+				if (e.key === 'ArrowUp') {
+					e.preventDefault();
+					e.stopPropagation();
+					this.navigatePromptDropdown(-1);
+					return;
+				}
+				if (e.key === 'Enter' || e.key === 'Tab') {
+					e.preventDefault();
+					e.stopPropagation();
+					e.stopImmediatePropagation();
+					this.selectPromptFromDropdown();
+					return;
+				}
+				if (e.key === 'Escape') {
+					e.preventDefault();
+					this.closePromptDropdown();
+					return;
+				}
+			}
+
 			if (e.key === 'Enter' && !e.shiftKey) {
 				e.preventDefault();
 				e.stopPropagation();
@@ -565,6 +601,7 @@ export class SidekickView extends ItemView {
 			this.agents = await loadAgents(this.app, getAgentsFolder(this.plugin.settings));
 			this.skills = await loadSkills(this.app, getSkillsFolder(this.plugin.settings));
 			this.mcpServers = await loadMcpServers(this.app, getToolsFolder(this.plugin.settings));
+			this.prompts = await loadPrompts(this.app, getPromptsFolder(this.plugin.settings));
 
 			// Select all skills and tools by default
 			this.enabledSkills = new Set(this.skills.map(s => s.name));
@@ -583,7 +620,7 @@ export class SidekickView extends ItemView {
 
 		this.updateConfigUI();
 		this.configDirty = true;
-		new Notice(`Loaded ${this.agents.length} agent(s), ${this.models.length} model(s), ${this.skills.length} skill(s), ${this.mcpServers.length} tool server(s).`);
+		new Notice(`Loaded ${this.agents.length} agent(s), ${this.models.length} model(s), ${this.skills.length} skill(s), ${this.mcpServers.length} tool server(s), ${this.prompts.length} prompt(s).`);
 	}
 
 	private updateConfigUI(): void {
@@ -874,6 +911,131 @@ export class SidekickView extends ItemView {
 			this.scopePaths = paths;
 			this.renderScopeBar();
 		}).open();
+	}
+
+	// ── Prompt slash-command dropdown ─────────────────────────────
+
+	private handlePromptTrigger(): void {
+		const value = this.inputEl.value;
+		// Trigger only when text starts with "/" (no space before the slash)
+		if (!value.startsWith('/') || value.includes(' ')) {
+			this.closePromptDropdown();
+			return;
+		}
+		const query = value.slice(1).toLowerCase();
+		const filtered = this.prompts.filter(p => p.name.toLowerCase().includes(query));
+		if (filtered.length === 0) {
+			this.closePromptDropdown();
+			return;
+		}
+		this.showPromptDropdown(filtered);
+	}
+
+	private showPromptDropdown(prompts: PromptConfig[]): void {
+		this.closePromptDropdown();
+		this.promptDropdown = document.createElement('div');
+		this.promptDropdown.addClass('sidekick-prompt-dropdown');
+		this.promptDropdownIndex = 0;
+
+		for (let i = 0; i < prompts.length; i++) {
+			const p = prompts[i];
+			if (!p) continue;
+			const item = this.promptDropdown.createDiv({cls: 'sidekick-prompt-item'});
+			if (i === 0) item.addClass('is-selected');
+
+			item.createSpan({cls: 'sidekick-prompt-item-name', text: `/${p.name}`});
+			const descText = p.description || (p.content.length > 60 ? p.content.slice(0, 60) + '…' : p.content);
+			item.createSpan({cls: 'sidekick-prompt-item-desc', text: descText});
+			if (p.agent) {
+				item.createSpan({cls: 'sidekick-prompt-item-agent', text: p.agent});
+			}
+
+			item.addEventListener('click', () => {
+				this.promptDropdownIndex = i;
+				this.selectPromptFromDropdown();
+			});
+			item.addEventListener('mouseenter', () => {
+				this.promptDropdownIndex = i;
+				this.updatePromptDropdownSelection();
+			});
+		}
+
+		// Position above the input area
+		const inputArea = this.inputEl.closest('.sidekick-input-area');
+		if (inputArea) {
+			inputArea.appendChild(this.promptDropdown);
+		}
+	}
+
+	private closePromptDropdown(): void {
+		if (this.promptDropdown) {
+			this.promptDropdown.remove();
+			this.promptDropdown = null;
+			this.promptDropdownIndex = -1;
+		}
+	}
+
+	private navigatePromptDropdown(direction: number): void {
+		if (!this.promptDropdown) return;
+		const items = this.promptDropdown.querySelectorAll('.sidekick-prompt-item');
+		if (items.length === 0) return;
+		this.promptDropdownIndex = (this.promptDropdownIndex + direction + items.length) % items.length;
+		this.updatePromptDropdownSelection();
+	}
+
+	private updatePromptDropdownSelection(): void {
+		if (!this.promptDropdown) return;
+		const items = this.promptDropdown.querySelectorAll('.sidekick-prompt-item');
+		items.forEach((el, i) => {
+			el.toggleClass('is-selected', i === this.promptDropdownIndex);
+		});
+	}
+
+	private selectPromptFromDropdown(): void {
+		if (!this.promptDropdown) return;
+		const value = this.inputEl.value;
+		const query = value.startsWith('/') ? value.slice(1).toLowerCase() : '';
+		const filtered = this.prompts.filter(p => p.name.toLowerCase().includes(query));
+		const selected = filtered[this.promptDropdownIndex];
+		if (!selected) {
+			this.closePromptDropdown();
+			return;
+		}
+
+		this.activePrompt = selected;
+
+		// Auto-select the prompt's agent
+		if (selected.agent) {
+			const matchingAgent = this.agents.find(a => a.name === selected.agent);
+			if (matchingAgent) {
+				this.selectedAgent = matchingAgent.name;
+				this.agentSelect.value = matchingAgent.name;
+				// Also set the agent's preferred model
+				if (matchingAgent.model) {
+					const target = matchingAgent.model.toLowerCase();
+					let modelMatch = this.models.find(
+						m => m.name.toLowerCase() === target || m.id.toLowerCase() === target
+					);
+					if (!modelMatch) {
+						modelMatch = this.models.find(
+							m => m.id.toLowerCase().includes(target) || m.name.toLowerCase().includes(target)
+						);
+					}
+					if (modelMatch) {
+						this.selectedModel = modelMatch.id;
+						this.modelSelect.value = modelMatch.id;
+					}
+				}
+				this.configDirty = true;
+			}
+		}
+
+		// Replace input with /prompt-name + space
+		this.inputEl.value = `/${selected.name} `;
+		this.inputEl.style.height = 'auto';
+		this.inputEl.style.height = Math.min(this.inputEl.scrollHeight, 200) + 'px';
+		this.inputEl.focus();
+		this.closePromptDropdown();
 	}
 
 	// ── Session sidebar ──────────────────────────────────────────
@@ -1600,13 +1762,35 @@ export class SidekickView extends ItemView {
 	// ── Send & abort ─────────────────────────────────────────────
 
 	private async handleSend(): Promise<void> {
-		const prompt = this.inputEl.value.trim();
-		if (!prompt || this.isStreaming) return;
+		const rawInput = this.inputEl.value.trim();
+		if (!rawInput || this.isStreaming) return;
 
 		if (!this.plugin.copilot) {
 			new Notice('Copilot is not configured. Go to Settings → Sidekick.');
 			return;
 		}
+
+		// Close prompt dropdown if open
+		this.closePromptDropdown();
+
+		// Resolve prompt command: strip /prompt-name prefix, extract user text
+		let prompt = rawInput;
+		let usedPrompt: PromptConfig | null = this.activePrompt;
+
+		if (rawInput.startsWith('/')) {
+			const spaceIdx = rawInput.indexOf(' ');
+			if (spaceIdx > 0) {
+				const cmdName = rawInput.slice(1, spaceIdx);
+				const found = this.prompts.find(p => p.name === cmdName);
+				if (found) {
+					usedPrompt = found;
+					prompt = rawInput.slice(spaceIdx + 1).trim();
+				}
+			}
+		}
+
+		// Display prompt (show original input to user)
+		const displayPrompt = rawInput;
 
 		// Snapshot attachments and scope
 		const currentAttachments = [...this.attachments];
@@ -1617,8 +1801,36 @@ export class SidekickView extends ItemView {
 		}
 		const currentScopePaths = [...this.scopePaths];
 
+		// Auto-select agent from prompt if specified
+		if (usedPrompt?.agent) {
+			const matchingAgent = this.agents.find(a => a.name === usedPrompt!.agent);
+			if (matchingAgent) {
+				this.selectedAgent = matchingAgent.name;
+				this.agentSelect.value = matchingAgent.name;
+				if (matchingAgent.model) {
+					const target = matchingAgent.model.toLowerCase();
+					let modelMatch = this.models.find(
+						m => m.name.toLowerCase() === target || m.id.toLowerCase() === target
+					);
+					if (!modelMatch) {
+						modelMatch = this.models.find(
+							m => m.id.toLowerCase().includes(target) || m.name.toLowerCase().includes(target)
+						);
+					}
+					if (modelMatch) {
+						this.selectedModel = modelMatch.id;
+						this.modelSelect.value = modelMatch.id;
+					}
+				}
+			}
+		}
+
+		// Prepend prompt template content if active
+		const sendPrompt = usedPrompt ? `${usedPrompt.content}\n\n${prompt}` : prompt;
+		this.activePrompt = null;
+
 		// Update UI
-		this.addUserMessage(prompt, currentAttachments, currentScopePaths);
+		this.addUserMessage(displayPrompt, currentAttachments, currentScopePaths);
 		this.inputEl.value = '';
 		this.inputEl.style.height = 'auto';
 		this.attachments = [];
@@ -1644,10 +1856,10 @@ export class SidekickView extends ItemView {
 			}
 
 			const sdkAttachments = this.buildSdkAttachments(currentAttachments);
-			const fullPrompt = this.buildPrompt(prompt, currentAttachments);
+			const fullPrompt = this.buildPrompt(sendPrompt, currentAttachments);
 
 			console.log('Sidekick: sending message', {
-				prompt: fullPrompt.slice(0, 100),
+				prompt: fullPrompt.slice(0, 200),
 				attachments: sdkAttachments,
 				scopePaths: this.scopePaths,
 			});
@@ -1872,8 +2084,7 @@ export class SidekickView extends ItemView {
 		this.configDirty = true;
 		this.attachments = [];
 		this.scopePaths = [];
-
-		this.chatContainer.empty();
+		this.activePrompt = null;
 		this.renderWelcome();
 		this.renderAttachments();
 		this.renderScopeBar();

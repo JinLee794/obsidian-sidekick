@@ -31,6 +31,17 @@ export interface ChatMessage {
 	attachments?: ChatAttachment[];
 }
 
+/** Parsed prompt template from *.prompt.md. */
+export interface PromptConfig {
+	name: string;
+	/** Agent to auto-select when this prompt is used. */
+	agent?: string;
+	/** Short description shown in the prompt picker dropdown. */
+	description?: string;
+	/** Content to prepend to the user's message. */
+	content: string;
+}
+
 /** An attachment added to a chat message. */
 export interface ChatAttachment {
 	type: 'file' | 'directory' | 'clipboard' | 'image';

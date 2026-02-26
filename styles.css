@@ -571,6 +571,7 @@
 /* ── Input area ───────────────────────────────────────────────── */
 
 .sidekick-input-area {
+	position: relative;
 	display: flex;
 	flex-direction: column;
 	gap: 4px;
@@ -1066,4 +1067,60 @@ body.sidekick-no-select {
 	border-radius: var(--radius-s);
 	background: var(--background-primary);
 	color: var(--text-normal);
+}
+
+/* ── Prompt dropdown ─────────────────────────────────────────── */
+
+.sidekick-prompt-dropdown {
+	position: absolute;
+	bottom: 100%;
+	left: 0;
+	right: 0;
+	max-height: 220px;
+	overflow-y: auto;
+	background: var(--background-primary);
+	border: 1px solid var(--background-modifier-border);
+	border-radius: var(--radius-m);
+	box-shadow: var(--shadow-s);
+	z-index: 100;
+	margin-bottom: 4px;
+	padding: 4px 0;
+}
+
+.sidekick-prompt-item {
+	padding: 6px 10px;
+	cursor: pointer;
+	display: flex;
+	flex-direction: row;
+	align-items: baseline;
+	gap: 6px;
+	overflow: hidden;
+}
+
+.sidekick-prompt-item:hover,
+.sidekick-prompt-item.is-selected {
+	background: var(--background-modifier-hover);
+}
+
+.sidekick-prompt-item-agent {
+	font-size: var(--font-ui-small);
+	color: var(--text-accent);
+	font-weight: 600;
+	flex-shrink: 0;
+}
+
+.sidekick-prompt-item-name {
+	font-weight: 600;
+	font-size: var(--font-ui-small);
+	color: var(--text-normal);
+	flex-shrink: 0;
+}
+
+.sidekick-prompt-item-desc {
+	font-size: var(--font-ui-small);
+	color: var(--text-muted);
+	white-space: nowrap;
+	overflow: hidden;
+	text-overflow: ellipsis;
+	min-width: 0;
 }

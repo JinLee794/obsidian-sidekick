@@ -33,6 +33,11 @@ export function getToolsFolder(settings: SidekickSettings): string {
 	return normalizePath(`${settings.sidekickFolder}/tools`);
 }
 
+/** Derive the prompts subfolder from the base Sidekick folder. */
+export function getPromptsFolder(settings: SidekickSettings): string {
+	return normalizePath(`${settings.sidekickFolder}/prompts`);
+}
+
 const SAMPLE_SKILL_CONTENT = `---
 name: ascii-art
 description: Generates stylized ASCII art text using block characters
@@ -57,6 +62,12 @@ model: Claude Sonnet 4.5
 # Grammar Assistant agent Instructions
 
 You are the **Grammar Assistant agent** - the primary task is to helps users improve their writing
+`;
+
+const SAMPLE_PROMPT_CONTENT = `---
+agent: Grammar
+---
+Translate the provided text from English to Portuguese.
 `;
 
 export class SidekickSettingTab extends PluginSettingTab {
@@ -120,7 +131,7 @@ export class SidekickSettingTab extends PluginSettingTab {
 						const adapter = this.app.vault.adapter;
 
 						// Create base folder and subfolders
-						for (const sub of ['', '/agents', '/skills', '/skills/ascii-art', '/tools']) {
+						for (const sub of ['', '/agents', '/skills', '/skills/ascii-art', '/tools', '/prompts']) {
 							const dir = normalizePath(`${base}${sub}`);
 							if (!(await adapter.exists(dir))) {
 								await this.app.vault.createFolder(dir);
@@ -153,7 +164,13 @@ export class SidekickSettingTab extends PluginSettingTab {
 							await this.app.vault.create(mcpPath, mcpContent);
 						}
 
-						new Notice('Sidekick folder initialized with sample agent, skill, and mcp.json.');
+						// Sample prompt
+						const promptPath = normalizePath(`${base}/prompts/en-to-pt.prompt.md`);
+						if (!(await adapter.exists(promptPath))) {
+							await this.app.vault.create(promptPath, SAMPLE_PROMPT_CONTENT);
+						}
+
+						new Notice('Sidekick folder initialized with sample agent, skill, prompt, and mcp.json.');
 					} catch (e) {
 						new Notice(`Failed to initialize Sidekick folder: ${String(e)}`);
 					}
