@@ -254,6 +254,7 @@ export class SidekickView extends ItemView {
 	private enabledSkills: Set<string> = new Set();
 	private enabledMcpServers: Set<string> = new Set();
 	private attachments: ChatAttachment[] = [];
+	private activeNotePath: string | null = null;
 	private scopePaths: string[] = [];
 	private workingDir = '';  // vault-relative path, '' means vault root
 
@@ -276,6 +277,7 @@ export class SidekickView extends ItemView {
 	private toolCallsContainer: HTMLElement | null = null;
 	private inputEl!: HTMLTextAreaElement;
 	private attachmentsBar!: HTMLElement;
+	private activeNoteBar!: HTMLElement;
 	private scopeBar!: HTMLElement;
 	private sendBtn!: HTMLButtonElement;
 	private agentSelect!: HTMLSelectElement;
@@ -313,6 +315,12 @@ export class SidekickView extends ItemView {
 
 		this.buildUI();
 		await this.loadAllConfigs();
+
+		// Track active note
+		this.updateActiveNote();
+		this.registerEvent(
+			this.app.workspace.on('file-open', () => this.updateActiveNote())
+		);
 	}
 
 	async onClose(): Promise<void> {
@@ -369,8 +377,9 @@ export class SidekickView extends ItemView {
 		setIcon(clipBtn, 'clipboard-paste');
 		clipBtn.addEventListener('click', () => void this.handleClipboard());
 
-		// Attachments & scope (shown inline after action buttons)
+		// Attachments, active note & scope (shown inline after action buttons)
 		this.attachmentsBar = inputActions.createDiv({cls: 'sidekick-attachments-bar'});
+		this.activeNoteBar = inputActions.createDiv({cls: 'sidekick-active-note-bar'});
 		this.scopeBar = inputActions.createDiv({cls: 'sidekick-scope-bar'});
 
 		// Row for textarea + send button
@@ -720,6 +729,35 @@ export class SidekickView extends ItemView {
 			this.scopePaths = [];
 			this.renderScopeBar();
 		});
+	}
+
+	private updateActiveNote(): void {
+		const file = this.app.workspace.getActiveFile();
+		this.activeNotePath = file ? file.path : null;
+		this.renderActiveNoteBar();
+
+		// Update working directory to the parent folder of the active note
+		if (file) {
+			const lastSlash = file.path.lastIndexOf('/');
+			this.workingDir = lastSlash > 0 ? file.path.substring(0, lastSlash) : '';
+			this.updateCwdButton();
+			this.configDirty = true;
+		}
+	}
+
+	private renderActiveNoteBar(): void {
+		this.activeNoteBar.empty();
+		if (!this.activeNotePath) {
+			this.activeNoteBar.addClass('is-hidden');
+			return;
+		}
+		this.activeNoteBar.removeClass('is-hidden');
+		const tag = this.activeNoteBar.createDiv({cls: 'sidekick-attachment-tag sidekick-active-note-tag'});
+		const ic = tag.createSpan({cls: 'sidekick-attachment-icon'});
+		setIcon(ic, 'file-text');
+		const name = this.activeNotePath.split('/').pop() || this.activeNotePath;
+		tag.createSpan({text: name, cls: 'sidekick-attachment-name'});
+		tag.setAttribute('title', `Active note: ${this.activeNotePath}`);
 	}
 
 	private handleAttachFile(): void {
@@ -1197,6 +1235,11 @@ export class SidekickView extends ItemView {
 
 		// Snapshot attachments and scope
 		const currentAttachments = [...this.attachments];
+		// Auto-include active note if not already in attachments
+		if (this.activeNotePath && !currentAttachments.some(a => a.type === 'file' && a.path === this.activeNotePath && !a.absolutePath)) {
+			const name = this.activeNotePath.split('/').pop() || this.activeNotePath;
+			currentAttachments.push({type: 'file', name, path: this.activeNotePath});
+		}
 		const currentScopePaths = [...this.scopePaths];
 
 		// Update UI
