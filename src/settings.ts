@@ -6,18 +6,29 @@ const DEFAULT_COPILOT_LOCATION = '';
 
 export interface SidekickSettings {
 	copilotLocation: string;
-	agentsFolder: string;
-	skillsFolder: string;
-	toolsFolder: string;
+	sidekickFolder: string;
 	toolApproval: 'ask' | 'allow';
 }
 
 export const DEFAULT_SETTINGS: SidekickSettings = {
 	copilotLocation: DEFAULT_COPILOT_LOCATION,
-	agentsFolder: 'sidekick/agents',
-	skillsFolder: 'sidekick/skills',
-	toolsFolder: 'sidekick/tools',
+	sidekickFolder: 'sidekick',
 	toolApproval: 'allow',
+}
+
+/** Derive the agents subfolder from the base Sidekick folder. */
+export function getAgentsFolder(settings: SidekickSettings): string {
+	return normalizePath(`${settings.sidekickFolder}/agents`);
+}
+
+/** Derive the skills subfolder from the base Sidekick folder. */
+export function getSkillsFolder(settings: SidekickSettings): string {
+	return normalizePath(`${settings.sidekickFolder}/skills`);
+}
+
+/** Derive the tools subfolder from the base Sidekick folder. */
+export function getToolsFolder(settings: SidekickSettings): string {
+	return normalizePath(`${settings.sidekickFolder}/tools`);
 }
 
 const SAMPLE_SKILL_CONTENT = `---
@@ -90,118 +101,59 @@ export class SidekickSettingTab extends PluginSettingTab {
 				}));
 
 		new Setting(containerEl)
-			.setName('Agents folder')
-			.setDesc('Vault folder where custom agents are stored.')
+			.setName('Sidekick folder')
+			.setDesc('Vault folder for agents, skills, and tools.')
 			.addText(text => text
-				.setPlaceholder('e.g. sidekick/agents')
-				.setValue(this.plugin.settings.agentsFolder)
+				.setPlaceholder('e.g. sidekick')
+				.setValue(this.plugin.settings.sidekickFolder)
 				.onChange(async (value) => {
-					this.plugin.settings.agentsFolder = value;
+					this.plugin.settings.sidekickFolder = value;
 					await this.plugin.saveSettings();
 				}))
 			.addButton(button => button
 				.setButtonText('Initialize')
 				.onClick(async () => {
 					try {
-						const folder = normalizePath(this.plugin.settings.agentsFolder);
+						const base = normalizePath(this.plugin.settings.sidekickFolder);
 						const adapter = this.app.vault.adapter;
 
-						if (!(await adapter.exists(folder))) {
-							await this.app.vault.createFolder(folder);
-						}
-
-						const filePath = normalizePath(`${folder}/grammar.agent.md`);
-						if (await adapter.exists(filePath)) {
-							new Notice('Sample agent already exists.');
-							return;
-						}
-
-						await this.app.vault.create(filePath, SAMPLE_AGENT_CONTENT);
-						new Notice('Agents folder initialized with sample agent.');
-					} catch (e) {
-						new Notice(`Failed to initialize agents folder: ${String(e)}`);
-					}
-				}));
-
-		new Setting(containerEl)
-			.setName('Skills folder')
-			.setDesc('Vault folder where skills are stored.')
-			.addText(text => text
-				.setPlaceholder('e.g. sidekick/skills')
-				.setValue(this.plugin.settings.skillsFolder)
-				.onChange(async (value) => {
-					this.plugin.settings.skillsFolder = value;
-					await this.plugin.saveSettings();
-				}))
-			.addButton(button => button
-				.setButtonText('Initialize')
-				.onClick(async () => {
-					try {
-						const folder = normalizePath(this.plugin.settings.skillsFolder);
-						const adapter = this.app.vault.adapter;
-
-						if (!(await adapter.exists(folder))) {
-							await this.app.vault.createFolder(folder);
-						}
-
-						const skillFolder = normalizePath(`${folder}/ascii-art`);
-						if (!(await adapter.exists(skillFolder))) {
-							await this.app.vault.createFolder(skillFolder);
-						}
-
-						const filePath = normalizePath(`${skillFolder}/SKILL.md`);
-						if (await adapter.exists(filePath)) {
-							new Notice('Sample skill already exists.');
-							return;
-						}
-
-						await this.app.vault.create(filePath, SAMPLE_SKILL_CONTENT);
-						new Notice('Skills folder initialized with ascii-art skill.');
-					} catch (e) {
-						new Notice(`Failed to initialize skills folder: ${String(e)}`);
-					}
-				}));
-
-		new Setting(containerEl)
-			.setName('Tools folder')
-			.setDesc('Vault folder where tool configurations are stored.')
-			.addText(text => text
-				.setPlaceholder('e.g. sidekick/tools')
-				.setValue(this.plugin.settings.toolsFolder)
-				.onChange(async (value) => {
-					this.plugin.settings.toolsFolder = value;
-					await this.plugin.saveSettings();
-				}))
-			.addButton(button => button
-				.setButtonText('Initialize')
-				.onClick(async () => {
-					try {
-						const folder = normalizePath(this.plugin.settings.toolsFolder);
-						const adapter = this.app.vault.adapter;
-
-						if (!(await adapter.exists(folder))) {
-							await this.app.vault.createFolder(folder);
-						}
-
-						const filePath = normalizePath(`${folder}/mcp.json`);
-						if (await adapter.exists(filePath)) {
-							new Notice('The mcp.json file already exists.');
-							return;
-						}
-
-						const mcpContent = JSON.stringify({
-							servers: {
-								github: {
-									type: 'http',
-									url: 'https://api.githubcopilot.com/mcp/'
-								}
+						// Create base folder and subfolders
+						for (const sub of ['', '/agents', '/skills', '/skills/ascii-art', '/tools']) {
+							const dir = normalizePath(`${base}${sub}`);
+							if (!(await adapter.exists(dir))) {
+								await this.app.vault.createFolder(dir);
 							}
-						}, null, '\t');
+						}
 
-						await this.app.vault.create(filePath, mcpContent);
-						new Notice('Tools folder initialized with mcp.json.');
+						// Sample agent
+						const agentPath = normalizePath(`${base}/agents/grammar.agent.md`);
+						if (!(await adapter.exists(agentPath))) {
+							await this.app.vault.create(agentPath, SAMPLE_AGENT_CONTENT);
+						}
+
+						// Sample skill
+						const skillPath = normalizePath(`${base}/skills/ascii-art/SKILL.md`);
+						if (!(await adapter.exists(skillPath))) {
+							await this.app.vault.create(skillPath, SAMPLE_SKILL_CONTENT);
+						}
+
+						// Sample mcp.json
+						const mcpPath = normalizePath(`${base}/tools/mcp.json`);
+						if (!(await adapter.exists(mcpPath))) {
+							const mcpContent = JSON.stringify({
+								servers: {
+									github: {
+										type: 'http',
+										url: 'https://api.githubcopilot.com/mcp/'
+									}
+								}
+							}, null, '\t');
+							await this.app.vault.create(mcpPath, mcpContent);
+						}
+
+						new Notice('Sidekick folder initialized with sample agent, skill, and mcp.json.');
 					} catch (e) {
-						new Notice(`Failed to initialize tools folder: ${String(e)}`);
+						new Notice(`Failed to initialize Sidekick folder: ${String(e)}`);
 					}
 				}));
 

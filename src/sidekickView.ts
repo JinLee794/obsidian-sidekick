@@ -25,6 +25,7 @@ import type {
 } from './copilot';
 import type {AgentConfig, SkillInfo, McpServerEntry, ChatMessage, ChatAttachment} from './types';
 import {loadAgents, loadSkills, loadMcpServers} from './configLoader';
+import {getAgentsFolder, getSkillsFolder, getToolsFolder} from './settings';
 import {VaultScopeModal} from './vaultScopeModal';
 
 export const SIDEKICK_VIEW_TYPE = 'sidekick-view';
@@ -523,9 +524,9 @@ export class SidekickView extends ItemView {
 
 	private async loadAllConfigs(): Promise<void> {
 		try {
-			this.agents = await loadAgents(this.app, this.plugin.settings.agentsFolder);
-			this.skills = await loadSkills(this.app, this.plugin.settings.skillsFolder);
-			this.mcpServers = await loadMcpServers(this.app, this.plugin.settings.toolsFolder);
+			this.agents = await loadAgents(this.app, getAgentsFolder(this.plugin.settings));
+			this.skills = await loadSkills(this.app, getSkillsFolder(this.plugin.settings));
+			this.mcpServers = await loadMcpServers(this.app, getToolsFolder(this.plugin.settings));
 
 			// Select all skills and tools by default
 			this.enabledSkills = new Set(this.skills.map(s => s.name));
@@ -1311,7 +1312,7 @@ export class SidekickView extends ItemView {
 		const basePath = this.getVaultBasePath();
 		const skillDirs: string[] = [];
 		if (this.skills.length > 0) {
-			skillDirs.push(basePath + '/' + normalizePath(this.plugin.settings.skillsFolder));
+			skillDirs.push(basePath + '/' + getSkillsFolder(this.plugin.settings));
 		}
 		const disabledSkills = this.skills
 			.filter(s => !this.enabledSkills.has(s.name))
