@@ -51,8 +51,21 @@ export default class SidekickPlugin extends Plugin {
 			}
 			this.copilot = null;
 		}
-		const loc = this.settings.copilotLocation.trim();
-		this.copilot = new CopilotService(loc.length > 0 ? loc : undefined);
+		const s = this.settings;
+		if (s.copilotType === 'remote') {
+			const url = s.cliUrl.trim();
+			this.copilot = new CopilotService({
+				cliUrl: url || undefined,
+				githubToken: s.githubToken || undefined,
+			});
+		} else {
+			const loc = s.copilotLocation.trim();
+			this.copilot = new CopilotService({
+				cliPath: loc.length > 0 ? loc : undefined,
+				useLoggedInUser: s.useLoggedInUser,
+				githubToken: !s.useLoggedInUser && s.githubToken ? s.githubToken : undefined,
+			});
+		}
 	}
 
 	onunload() {

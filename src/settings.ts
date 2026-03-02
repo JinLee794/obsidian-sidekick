@@ -5,7 +5,15 @@ import type {ModelInfo} from "./copilot";
 const DEFAULT_COPILOT_LOCATION = '';
 
 export interface SidekickSettings {
+	/** 'local' uses cliPath, 'remote' uses cliUrl. */
+	copilotType: 'local' | 'remote';
 	copilotLocation: string;
+	/** URL of an existing CLI server to connect to. */
+	cliUrl: string;
+	/** Use the logged-in GitHub user for auth (local mode). */
+	useLoggedInUser: boolean;
+	/** GitHub personal access token (used when useLoggedInUser is false or in remote mode). */
+	githubToken: string;
 	sidekickFolder: string;
 	toolApproval: 'ask' | 'allow';
 	/** Model ID used for inline editor operations (context menu). Empty = SDK default. */
@@ -19,7 +27,11 @@ export interface SidekickSettings {
 }
 
 export const DEFAULT_SETTINGS: SidekickSettings = {
+	copilotType: 'local',
 	copilotLocation: DEFAULT_COPILOT_LOCATION,
+	cliUrl: '',
+	useLoggedInUser: true,
+	githubToken: '',
 	sidekickFolder: 'sidekick',
 	toolApproval: 'ask',
 	inlineModel: '',
@@ -115,22 +127,101 @@ export class SidekickSettingTab extends PluginSettingTab {
 		// Hoisted so the Test button and Models section can both reference it
 		let refreshModels: () => Promise<void> = async () => {};
 
+		// ── GitHub Copilot Client section ────────────────────────
+		// Heading row with Type dropdown + Test button
+		const clientFieldsEl = containerEl.createDiv();
+
+		const renderClientFields = () => {
+			clientFieldsEl.empty();
+			const isRemote = this.plugin.settings.copilotType === 'remote';
+
+			if (isRemote) {
+				new Setting(clientFieldsEl)
+					.setName('URL')
+					.setDesc('URL of existing CLI server to connect to.')
+					.addText(text => text
+						.setPlaceholder('e.g. localhost:8080')
+						.setValue(this.plugin.settings.cliUrl)
+						.onChange(async (value) => {
+							this.plugin.settings.cliUrl = value.trim();
+							await this.plugin.saveSettings();
+							await this.plugin.initCopilot();
+						}));
+
+				new Setting(clientFieldsEl)
+					.setName('GitHub Token')
+					.setDesc('GitHub token for authentication.')
+					.addText(text => {
+						text.inputEl.type = 'password';
+						text.inputEl.autocomplete = 'off';
+						text.setPlaceholder('ghp_…')
+							.setValue(this.plugin.settings.githubToken)
+							.onChange(async (value) => {
+								this.plugin.settings.githubToken = value.trim();
+								await this.plugin.saveSettings();
+								await this.plugin.initCopilot();
+							});
+					});
+			} else {
+				new Setting(clientFieldsEl)
+					.setName('Path')
+					.setDesc('Path to CLI executable (default: "copilot" from PATH).')
+					.addText(text => text
+						.setPlaceholder('Leave blank for default')
+						.setValue(this.plugin.settings.copilotLocation)
+						.onChange(async (value) => {
+							const sanitized = value.trim();
+							if (/[;|&`$(){}]/.test(sanitized)) {
+								new Notice('Copilot location contains invalid characters.');
+								return;
+							}
+							this.plugin.settings.copilotLocation = sanitized;
+							await this.plugin.saveSettings();
+							await this.plugin.initCopilot();
+						}));
+
+				new Setting(clientFieldsEl)
+					.setName('Use Logged\u2011in User')
+					.setDesc('Whether to use logged-in user for authentication.')
+					.addToggle(toggle => toggle
+						.setValue(this.plugin.settings.useLoggedInUser)
+						.onChange(async (value) => {
+							this.plugin.settings.useLoggedInUser = value;
+							await this.plugin.saveSettings();
+							await this.plugin.initCopilot();
+							renderClientFields();
+						}));
+
+				if (!this.plugin.settings.useLoggedInUser) {
+					new Setting(clientFieldsEl)
+						.setName('GitHub Token')
+						.setDesc('GitHub token for authentication.')
+						.addText(text => {
+							text.inputEl.type = 'password';
+							text.inputEl.autocomplete = 'off';
+							text.setPlaceholder('ghp_…')
+								.setValue(this.plugin.settings.githubToken)
+								.onChange(async (value) => {
+									this.plugin.settings.githubToken = value.trim();
+									await this.plugin.saveSettings();
+									await this.plugin.initCopilot();
+								});
+						});
+				}
+			}
+		};
+
 		new Setting(containerEl)
-			.setName('GitHub Copilot CLI location')
-			.setDesc('Path to the GitHub Copilot CLI. Leave blank to use the default "copilot" from PATH.')
-			.addText(text => text
-				.setPlaceholder('e.g. /usr/local/bin/copilot')
-				.setValue(this.plugin.settings.copilotLocation)
+			.setName('GitHub Copilot Client')
+			.setHeading()
+			.addDropdown(dropdown => dropdown
+				.addOptions({local: 'Local CLI', remote: 'Remote CLI'})
+				.setValue(this.plugin.settings.copilotType)
 				.onChange(async (value) => {
-					const sanitized = value.trim();
-					// Reject shell metacharacters that shouldn't appear in a binary path
-					if (/[;|&`$(){}]/.test(sanitized)) {
-						new Notice('Copilot location contains invalid characters.');
-						return;
-					}
-					this.plugin.settings.copilotLocation = sanitized;
+					this.plugin.settings.copilotType = value as 'local' | 'remote';
 					await this.plugin.saveSettings();
 					await this.plugin.initCopilot();
+					renderClientFields();
 				}))
 			.addButton(button => button
 				.setButtonText('Test')
@@ -143,7 +234,6 @@ export class SidekickSettingTab extends PluginSettingTab {
 						}
 						const result = await this.plugin.copilot.ping();
 						new Notice(`Copilot connected: ${result.message}`);
-						// Refresh models after successful connection test
 						await refreshModels();
 					} catch (e) {
 						new Notice(`Test failed: ${String(e)}`);
@@ -152,6 +242,9 @@ export class SidekickSettingTab extends PluginSettingTab {
 						button.setButtonText('Test');
 					}
 				}));
+
+		containerEl.appendChild(clientFieldsEl);
+		renderClientFields();
 
 		new Setting(containerEl)
 			.setName('Sidekick folder')

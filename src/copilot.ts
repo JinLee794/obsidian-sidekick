@@ -84,23 +84,38 @@ function cleanEnv(): Record<string, string> {
 export class CopilotService {
 	private client: CopilotClient | null = null;
 	private readonly cliPath: string | undefined;
+	private readonly cliUrl: string | undefined;
+	private readonly githubToken: string | undefined;
+	private readonly useLoggedInUser: boolean | undefined;
 
-	/**
-	 * @param cliPath - Optional explicit path to the Copilot CLI.
-	 *                   When omitted the SDK resolves it automatically.
-	 */
-	constructor(cliPath?: string) {
-		this.cliPath = cliPath;
+	constructor(opts?: {
+		cliPath?: string;
+		cliUrl?: string;
+		githubToken?: string;
+		useLoggedInUser?: boolean;
+	}) {
+		this.cliPath = opts?.cliPath;
+		this.cliUrl = opts?.cliUrl;
+		this.githubToken = opts?.githubToken;
+		this.useLoggedInUser = opts?.useLoggedInUser;
 	}
 
 	private async createClient(): Promise<CopilotClient> {
+		if (this.cliUrl) {
+			// Remote mode — connect to existing server
+			return new CopilotClient({
+				cliUrl: this.cliUrl,
+				...(this.githubToken ? {githubToken: this.githubToken} : {}),
+			});
+		}
+		// Local mode — spawn CLI process
 		const cliPath = this.cliPath || await resolveDefaultCliPath();
 		return new CopilotClient({
 			cliPath: cliPath,
-			autoStart: false,
-			autoRestart: false,
 			cwd: homedir(),
 			env: cleanEnv(),
+			...(this.githubToken ? {githubToken: this.githubToken} : {}),
+			...(this.useLoggedInUser !== undefined ? {useLoggedInUser: this.useLoggedInUser} : {}),
 		});
 	}
 
