@@ -251,6 +251,7 @@ triggers:
     cron: "0 8 * * *"
   - type: onFileChange
     glob: "**/*.md"
+enabled: true
 ---
 Help me prepare my day, including asks on me, recommendations for clear actions to prepare, and suggestions on which items to prioritize over others.
 ```

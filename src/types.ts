@@ -69,6 +69,8 @@ export interface TriggerConfig {
 	name: string;
 	description?: string;
 	agent?: string;
+	/** Whether the trigger is active. Defaults to true when not set. */
+	enabled: boolean;
 	triggers: TriggerEntry[];
 	/** Prompt content to send when the trigger fires. */
 	content: string;

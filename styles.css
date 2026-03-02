@@ -463,6 +463,67 @@
 	font-style: italic;
 }
 
+/* ── Ghost-text autocomplete ──────────────────────────────────── */
+
+.sidekick-ghost-text {
+	opacity: 0.4;
+	font-style: italic;
+	pointer-events: none;
+	user-select: none;
+	white-space: pre-wrap;
+}
+
+/* ── Sidekick gutter ──────────────────────────────────────────── */
+
+.cm-editor .sidekick-gutter {
+	width: 26px;
+	cursor: default;
+}
+
+/* Indicator button inside the gutter */
+.sidekick-autocomplete-indicator {
+	display: flex;
+	align-items: center;
+	justify-content: center;
+	width: 26px;
+	height: 100%;
+	padding: 0;
+	border: none;
+	border-radius: var(--radius-s);
+	background: transparent;
+	color: var(--text-muted);
+	cursor: pointer;
+	opacity: 0.5;
+	transition: opacity 0.2s ease, color 0.2s ease, background 0.2s ease;
+}
+
+.sidekick-autocomplete-indicator .svg-icon {
+	width: 16px;
+	height: 16px;
+}
+
+.sidekick-autocomplete-indicator:hover {
+	opacity: 1;
+	color: var(--interactive-accent);
+	background: var(--background-modifier-hover);
+}
+
+.sidekick-autocomplete-indicator:active {
+	background: var(--background-modifier-active-hover);
+}
+
+/* Animated pulse when fetching a completion */
+.sidekick-autocomplete-indicator.is-loading {
+	opacity: 1;
+	color: var(--interactive-accent);
+	animation: sidekick-indicator-pulse 1s ease-in-out infinite;
+}
+
+@keyframes sidekick-indicator-pulse {
+	0%, 100% { opacity: 0.5; transform: scale(1); }
+	50%      { opacity: 1;   transform: scale(1.15); }
+}
+
 /* ── Bottom panel ─────────────────────────────────────────────── */
 
 .sidekick-bottom {
@@ -954,11 +1015,28 @@ body.sidekick-no-select {
 	gap: 4px;
 	padding: 6px;
 	border-bottom: 1px solid var(--background-modifier-border);
+	align-items: stretch;
+}
+
+.sidekick-sidebar-btn-row {
+	display: flex;
 	align-items: center;
+	justify-content: center;
+	gap: 2px;
 }
 
 .sidekick-sidebar-new-btn {
-	align-self: center;
+	flex-shrink: 0;
+}
+
+.sidekick-sidebar-filter-btn,
+.sidekick-sidebar-sort-btn {
+	flex-shrink: 0;
+	padding: 2px;
+	color: var(--text-muted);
+}
+.sidekick-sidebar-filter-btn.is-active {
+	color: var(--interactive-accent);
 }
 
 .sidekick-sidebar-search {
@@ -975,6 +1053,8 @@ body.sidekick-no-select {
 .sidekick-sidebar-search:focus {
 	border-color: var(--interactive-accent);
 }
+
+/* Session list */
 
 .sidekick-sidebar-list {
 	flex: 1;

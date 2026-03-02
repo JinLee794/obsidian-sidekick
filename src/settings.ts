@@ -8,6 +8,10 @@ export interface SidekickSettings {
 	copilotLocation: string;
 	sidekickFolder: string;
 	toolApproval: 'ask' | 'allow';
+	/** Model ID used for inline editor operations (context menu). Empty = SDK default. */
+	inlineModel: string;
+	/** Enable ghost-text autocomplete in the editor. */
+	autocompleteEnabled: boolean;
 	/** Custom display names for sessions, keyed by SDK sessionId. */
 	sessionNames?: Record<string, string>;
 	/** Last-fired timestamps for trigger deduplication, keyed by trigger name. */
@@ -17,7 +21,9 @@ export interface SidekickSettings {
 export const DEFAULT_SETTINGS: SidekickSettings = {
 	copilotLocation: DEFAULT_COPILOT_LOCATION,
 	sidekickFolder: 'sidekick',
-	toolApproval: 'allow',
+	toolApproval: 'ask',
+	inlineModel: '',
+	autocompleteEnabled: false,
 }
 
 /** Derive the agents subfolder from the base Sidekick folder. */
@@ -88,6 +94,7 @@ triggers:
     cron: "0 8 * * *"
   - type: onFileChange
     glob: "**/*.md"
+enabled: true
 ---
 Help me prepare my day, including asks on me, recommendations for clear actions to prepare, and suggestions on which items to prioritize over others.
 `;
@@ -105,44 +112,60 @@ export class SidekickSettingTab extends PluginSettingTab {
 
 		containerEl.empty();
 
+		// Hoisted so the Test button and Models section can both reference it
+		let refreshModels: () => Promise<void> = async () => {};
+
 		new Setting(containerEl)
-			.setName('Copilot location')
-			.setDesc('Path to the Copilot CLI')
+			.setName('GitHub Copilot CLI location')
+			.setDesc('Path to the GitHub Copilot CLI. Leave blank to use the default "copilot" from PATH.')
 			.addText(text => text
 				.setPlaceholder('e.g. /usr/local/bin/copilot')
 				.setValue(this.plugin.settings.copilotLocation)
 				.onChange(async (value) => {
-					this.plugin.settings.copilotLocation = value.trim();
+					const sanitized = value.trim();
+					// Reject shell metacharacters that shouldn't appear in a binary path
+					if (/[;|&`$(){}]/.test(sanitized)) {
+						new Notice('Copilot location contains invalid characters.');
+						return;
+					}
+					this.plugin.settings.copilotLocation = sanitized;
 					await this.plugin.saveSettings();
 					await this.plugin.initCopilot();
 				}))
 			.addButton(button => button
-				.setButtonText('Ping')
+				.setButtonText('Test')
 				.onClick(async () => {
 					button.setDisabled(true);
-					button.setButtonText('Pinging…');
+					button.setButtonText('Testing…');
 					try {
 						if (!this.plugin.copilot) {
 							throw new Error('Copilot service is not available');
 						}
 						const result = await this.plugin.copilot.ping();
 						new Notice(`Copilot connected: ${result.message}`);
+						// Refresh models after successful connection test
+						await refreshModels();
 					} catch (e) {
-						new Notice(`Ping failed: ${String(e)}`);
+						new Notice(`Test failed: ${String(e)}`);
 					} finally {
 						button.setDisabled(false);
-						button.setButtonText('Ping');
+						button.setButtonText('Test');
 					}
 				}));
 
 		new Setting(containerEl)
 			.setName('Sidekick folder')
-			.setDesc('Vault folder for agents, skills, and tools.')
+			.setDesc('Vault folder for agents, skills, tools and triggers.')
 			.addText(text => text
 				.setPlaceholder('e.g. sidekick')
 				.setValue(this.plugin.settings.sidekickFolder)
 				.onChange(async (value) => {
-					this.plugin.settings.sidekickFolder = value;
+					const sanitized = value.trim().replace(/\.\./g, '');
+					if (!sanitized || /[;|&`$(){}]/.test(sanitized)) {
+						new Notice('Sidekick folder name is invalid.');
+						return;
+					}
+					this.plugin.settings.sidekickFolder = sanitized;
 					await this.plugin.saveSettings();
 				}))
 			.addButton(button => button
@@ -218,48 +241,64 @@ export class SidekickSettingTab extends PluginSettingTab {
 		// --- Models section ---
 		new Setting(containerEl).setName('Models').setHeading();
 
-		const modelsContainer = containerEl.createDiv({cls: 'sidekick-models-list'});
+		let inlineModelSelect: HTMLSelectElement | null = null;
+
+		const populateInlineDropdown = (models: ModelInfo[]) => {
+			if (inlineModelSelect) {
+				inlineModelSelect.empty();
+				inlineModelSelect.createEl('option', {text: 'Default (SDK default)', value: ''});
+				for (const model of models) {
+					inlineModelSelect.createEl('option', {
+						text: model.name,
+						value: model.id,
+					});
+				}
+				if (this.plugin.settings.inlineModel) {
+					inlineModelSelect.value = this.plugin.settings.inlineModel;
+				}
+			}
+		};
+
+		refreshModels = async () => {
+			try {
+				if (!this.plugin.copilot) return;
+				const models: ModelInfo[] = await this.plugin.copilot.listModels();
+				populateInlineDropdown(models);
+			} catch {
+				// silently ignore — dropdown keeps its placeholder
+			}
+		};
 
 		new Setting(containerEl)
-			.setName('Available models')
-			.setDesc('Fetch available models from Copilot')
-			.addButton(button => button
-				.setButtonText('List')
-				.onClick(async () => {
-					button.setDisabled(true);
-					button.setButtonText('Loading…');
-					modelsContainer.empty();
-					try {
-						if (!this.plugin.copilot) {
-							throw new Error('Copilot service is not available');
-						}
-						const models: ModelInfo[] = await this.plugin.copilot.listModels();
-						this.renderModels(modelsContainer, models);
-						new Notice(`Loaded ${models.length} model(s).`);
-					} catch (e) {
-						modelsContainer.createEl('p', {
-							text: `Error: ${String(e)}`,
-							cls: 'sidekick-models-error'
-						});
-						new Notice(`Failed to load models: ${String(e)}`);
-					} finally {
-						button.setDisabled(false);
-						button.setButtonText('List');
-					}
+			.setName('Inline operations model')
+			.setDesc('Model used for editor context-menu actions (fix grammar, summarize, etc.).')
+			.addDropdown(dropdown => {
+				inlineModelSelect = dropdown.selectEl;
+				dropdown.addOption('', 'Default (SDK default)');
+				if (this.plugin.settings.inlineModel) {
+					dropdown.addOption(this.plugin.settings.inlineModel, this.plugin.settings.inlineModel);
+					dropdown.setValue(this.plugin.settings.inlineModel);
+				}
+				dropdown.onChange(async (value) => {
+					this.plugin.settings.inlineModel = value;
+					await this.plugin.saveSettings();
+				});
+			});
+
+		// --- Autocomplete section ---
+		new Setting(containerEl).setName('Autocomplete').setHeading();
+
+		new Setting(containerEl)
+			.setName('Enable ghost-text autocomplete')
+			.setDesc('Show inline suggestions as you type (uses the inline operations model).')
+			.addToggle(toggle => toggle
+				.setValue(this.plugin.settings.autocompleteEnabled)
+				.onChange(async (value) => {
+					this.plugin.settings.autocompleteEnabled = value;
+					await this.plugin.saveSettings();
 				}));
-	}
 
-	private renderModels(container: HTMLElement, models: ModelInfo[]): void {
-		if (models.length === 0) {
-			container.createEl('p', {text: 'No models available.'});
-			return;
-		}
-
-		const list = container.createEl('ul', {cls: 'sidekick-models-ul'});
-		for (const model of models) {
-			const item = list.createEl('li');
-			item.createEl('strong', {text: model.name});
-			item.createSpan({text: ` (${model.id})`});
-		}
+		// Auto-refresh models when opening settings
+		void refreshModels();
 	}
 }

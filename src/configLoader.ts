@@ -1,12 +1,15 @@
 import {App, normalizePath, TFile, TFolder} from 'obsidian';
 import type {AgentConfig, SkillInfo, McpServerEntry, PromptConfig, TriggerConfig, TriggerEntry} from './types';
 
+/** Module-level compiled regex for frontmatter detection. */
+const FM_RE = /^---\r?\n([\s\S]*?)\r?\n---\r?\n?([\s\S]*)$/;
+
 /**
  * Parse YAML-like frontmatter from markdown content.
  * Returns parsed key-value pairs and the body after the frontmatter block.
  */
 function parseFrontmatter(content: string): {meta: Record<string, string | string[]>; body: string} {
-	const match = content.match(/^---\r?\n([\s\S]*?)\r?\n---\r?\n?([\s\S]*)$/);
+	const match = content.match(FM_RE);
 	if (!match) return {meta: {}, body: content};
 	const meta: Record<string, string | string[]> = {};
 	const lines = (match[1] ?? '').split('\n');
@@ -49,22 +52,26 @@ export async function loadAgents(app: App, agentsFolder: string): Promise<AgentC
 	const abstract = app.vault.getAbstractFileByPath(folder);
 	if (!(abstract instanceof TFolder)) return agents;
 
-	for (const child of abstract.children) {
-		if (child instanceof TFile && child.extension === 'md' && child.name.endsWith('.agent.md')) {
-			const content = await app.vault.read(child);
-			const {meta, body} = parseFrontmatter(content);
-			const rawTools = meta['tools'];
-			const rawSkills = meta['skills'];
-			agents.push({
-				name: (typeof meta['name'] === 'string' ? meta['name'] : '') || child.basename.replace('.agent', ''),
-				description: (typeof meta['description'] === 'string' ? meta['description'] : '') || '',
-				model: (typeof meta['model'] === 'string' && meta['model']) || undefined,
-				tools: Array.isArray(rawTools) ? rawTools : (typeof rawTools === 'string' && rawTools ? rawTools.split(',').map(t => t.trim()).filter(Boolean) : undefined),
-				skills: Array.isArray(rawSkills) ? rawSkills : (typeof rawSkills === 'string' && rawSkills ? rawSkills.split(',').map(s => s.trim()).filter(Boolean) : undefined),
-				instructions: body.trim(),
-				filePath: child.path,
-			});
-		}
+	const agentFiles = abstract.children.filter(
+		(child): child is TFile => child instanceof TFile && child.extension === 'md' && child.name.endsWith('.agent.md')
+	);
+	const contents = await Promise.all(agentFiles.map(f => app.vault.read(f)));
+
+	for (let i = 0; i < agentFiles.length; i++) {
+		const child = agentFiles[i]!;
+		const content = contents[i]!;
+		const {meta, body} = parseFrontmatter(content);
+		const rawTools = meta['tools'];
+		const rawSkills = meta['skills'];
+		agents.push({
+			name: (typeof meta['name'] === 'string' ? meta['name'] : '') || child.basename.replace('.agent', ''),
+			description: (typeof meta['description'] === 'string' ? meta['description'] : '') || '',
+			model: (typeof meta['model'] === 'string' && meta['model']) || undefined,
+			tools: Array.isArray(rawTools) ? rawTools : (typeof rawTools === 'string' && rawTools ? rawTools.split(',').map(t => t.trim()).filter(Boolean) : undefined),
+			skills: Array.isArray(rawSkills) ? rawSkills : (typeof rawSkills === 'string' && rawSkills ? rawSkills.split(',').map(s => s.trim()).filter(Boolean) : undefined),
+			instructions: body.trim(),
+			filePath: child.path,
+		});
 	}
 	return agents;
 }
@@ -78,19 +85,23 @@ export async function loadSkills(app: App, skillsFolder: string): Promise<SkillI
 	const abstract = app.vault.getAbstractFileByPath(folder);
 	if (!(abstract instanceof TFolder)) return skills;
 
-	for (const child of abstract.children) {
-		if (child instanceof TFolder) {
-			const skillFile = app.vault.getAbstractFileByPath(normalizePath(`${child.path}/SKILL.md`));
-			if (skillFile instanceof TFile) {
-				const content = await app.vault.read(skillFile);
-				const {meta} = parseFrontmatter(content);
-				skills.push({
-					name: (typeof meta['name'] === 'string' ? meta['name'] : '') || child.name,
-					description: (typeof meta['description'] === 'string' ? meta['description'] : '') || '',
-					folderPath: child.path,
-				});
-			}
-		}
+	const skillFolders = abstract.children.filter((child): child is TFolder => child instanceof TFolder);
+	const skillFiles = skillFolders.map(child => {
+		const f = app.vault.getAbstractFileByPath(normalizePath(`${child.path}/SKILL.md`));
+		return f instanceof TFile ? {folder: child, file: f} : null;
+	}).filter((x): x is {folder: TFolder; file: TFile} => x !== null);
+
+	const contents = await Promise.all(skillFiles.map(s => app.vault.read(s.file)));
+
+	for (let i = 0; i < skillFiles.length; i++) {
+		const {folder: child} = skillFiles[i]!;
+		const content = contents[i]!;
+		const {meta} = parseFrontmatter(content);
+		skills.push({
+			name: (typeof meta['name'] === 'string' ? meta['name'] : '') || child.name,
+			description: (typeof meta['description'] === 'string' ? meta['description'] : '') || '',
+			folderPath: child.path,
+		});
 	}
 	return skills;
 }
@@ -104,17 +115,21 @@ export async function loadPrompts(app: App, promptsFolder: string): Promise<Prom
 	const abstract = app.vault.getAbstractFileByPath(folder);
 	if (!(abstract instanceof TFolder)) return prompts;
 
-	for (const child of abstract.children) {
-		if (child instanceof TFile && child.extension === 'md' && child.name.endsWith('.prompt.md')) {
-			const content = await app.vault.read(child);
-			const {meta, body} = parseFrontmatter(content);
-			prompts.push({
-				name: child.basename.replace('.prompt', ''),
-				agent: (typeof meta['agent'] === 'string' && meta['agent']) || undefined,
-				description: (typeof meta['description'] === 'string' && meta['description']) || undefined,
-				content: body.trim(),
-			});
-		}
+	const promptFiles = abstract.children.filter(
+		(child): child is TFile => child instanceof TFile && child.extension === 'md' && child.name.endsWith('.prompt.md')
+	);
+	const contents = await Promise.all(promptFiles.map(f => app.vault.read(f)));
+
+	for (let i = 0; i < promptFiles.length; i++) {
+		const child = promptFiles[i]!;
+		const content = contents[i]!;
+		const {meta, body} = parseFrontmatter(content);
+		prompts.push({
+			name: child.basename.replace('.prompt', ''),
+			agent: (typeof meta['agent'] === 'string' && meta['agent']) || undefined,
+			description: (typeof meta['description'] === 'string' && meta['description']) || undefined,
+			content: body.trim(),
+		});
 	}
 	return prompts;
 }
@@ -201,24 +216,29 @@ export async function loadTriggers(app: App, triggersFolder: string): Promise<Tr
 	const abstract = app.vault.getAbstractFileByPath(folder);
 	if (!(abstract instanceof TFolder)) return triggers;
 
-	for (const child of abstract.children) {
-		if (child instanceof TFile && child.extension === 'md' && child.name.endsWith('.trigger.md')) {
-			const content = await app.vault.read(child);
-			const fmMatch = content.match(/^---\r?\n([\s\S]*?)\r?\n---\r?\n?([\s\S]*)$/);
-			if (!fmMatch) continue;
-			const rawFm = fmMatch[1] ?? '';
-			const body = (fmMatch[2] ?? '').trim();
-			// Parse frontmatter by wrapping in --- delimiters so parseFrontmatter can process it
-			const {meta} = parseFrontmatter(`---\n${rawFm}\n---\n`);
+	const triggerFiles = abstract.children.filter(
+		(child): child is TFile => child instanceof TFile && child.extension === 'md' && child.name.endsWith('.trigger.md')
+	);
+	const contents = await Promise.all(triggerFiles.map(f => app.vault.read(f)));
 
-			triggers.push({
-				name: child.basename.replace('.trigger', ''),
-				description: (typeof meta['description'] === 'string' && meta['description']) || undefined,
-				agent: (typeof meta['agent'] === 'string' && meta['agent']) || undefined,
-				triggers: parseTriggerEntries(rawFm),
-				content: body,
-			});
-		}
+	for (let i = 0; i < triggerFiles.length; i++) {
+		const child = triggerFiles[i]!;
+		const content = contents[i]!;
+		const fmMatch = content.match(FM_RE);
+		if (!fmMatch) continue;
+		const rawFm = fmMatch[1] ?? '';
+		const body = (fmMatch[2] ?? '').trim();
+		// Parse frontmatter by wrapping in --- delimiters so parseFrontmatter can process it
+		const {meta} = parseFrontmatter(`---\n${rawFm}\n---\n`);
+
+		triggers.push({
+			name: child.basename.replace('.trigger', ''),
+			description: (typeof meta['description'] === 'string' && meta['description']) || undefined,
+			agent: (typeof meta['agent'] === 'string' && meta['agent']) || undefined,
+			enabled: String(meta['enabled']).toLowerCase() !== 'false',
+			triggers: parseTriggerEntries(rawFm),
+			content: body,
+		});
 	}
 	return triggers;
 }

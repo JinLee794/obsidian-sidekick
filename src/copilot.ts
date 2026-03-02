@@ -1,5 +1,5 @@
 import {CopilotClient, CopilotSession, approveAll} from '@github/copilot-sdk';
-import {existsSync} from 'node:fs';
+import {access} from 'node:fs/promises';
 import {join} from 'node:path';
 import {homedir} from 'node:os';
 import type {
@@ -35,27 +35,42 @@ declare const process: {
  * Resolve the platform-specific Copilot native binary from node_modules.
  * Falls back to the JS entry point if the native binary is not found.
  */
-function resolveDefaultCliPath(): string {
+async function resolveDefaultCliPath(): Promise<string> {
 	const nativePkg = `@github/copilot-${process.platform}-${process.arch}`;
 	const ext = process.platform === 'win32' ? '.exe' : '';
 	const nativeBin = join(__dirname, 'node_modules', nativePkg, `copilot${ext}`);
-	if (existsSync(nativeBin)) {
+	try {
+		await access(nativeBin);
 		return nativeBin;
+	} catch {
+		// Fallback to the JS CLI entry point
+		return join(__dirname, 'node_modules', '@github', 'copilot', 'index.js');
 	}
-	// Fallback to the JS CLI entry point
-	return join(__dirname, 'node_modules', '@github', 'copilot', 'index.js');
 }
 
 /**
  * Build a clean environment for the Copilot CLI subprocess.
- * Strips Electron-specific variables that can interfere with native binaries.
+ * Uses an allowlist of safe, well-known environment variables
+ * to avoid leaking sensitive or Electron-specific values.
  */
 function cleanEnv(): Record<string, string> {
+	const ALLOWED_PREFIXES = [
+		'PATH', 'HOME', 'USERPROFILE', 'TMPDIR', 'TEMP', 'TMP',
+		'LANG', 'LC_', 'SHELL', 'TERM', 'COLORTERM',
+		'USER', 'USERNAME', 'LOGNAME', 'HOSTNAME',
+		'SYSTEMROOT', 'WINDIR', 'COMSPEC', 'PROGRAMFILES',
+		'APPDATA', 'LOCALAPPDATA', 'HOMEDRIVE', 'HOMEPATH',
+		'XDG_', 'DISPLAY', 'WAYLAND_DISPLAY',
+		'NODE_', 'NPM_', 'NVM_',
+		'HTTP_PROXY', 'HTTPS_PROXY', 'NO_PROXY', 'ALL_PROXY',
+		'http_proxy', 'https_proxy', 'no_proxy', 'all_proxy',
+		'GITHUB_', 'GH_', 'COPILOT_',
+		'SSL_CERT_FILE', 'SSL_CERT_DIR', 'NODE_EXTRA_CA_CERTS',
+	];
 	const env: Record<string, string> = {};
 	for (const [key, value] of Object.entries(process.env)) {
-		if (value !== undefined
-			&& !key.startsWith('ELECTRON_')
-			&& key !== 'ORIGINAL_XDG_CURRENT_DESKTOP') {
+		if (value === undefined) continue;
+		if (ALLOWED_PREFIXES.some(prefix => key === prefix || key.startsWith(prefix))) {
 			env[key] = value;
 		}
 	}
@@ -67,7 +82,7 @@ function cleanEnv(): Record<string, string> {
  * for interacting with the Copilot SDK from within Obsidian.
  */
 export class CopilotService {
-	private client: CopilotClient;
+	private client: CopilotClient | null = null;
 	private readonly cliPath: string | undefined;
 
 	/**
@@ -76,11 +91,10 @@ export class CopilotService {
 	 */
 	constructor(cliPath?: string) {
 		this.cliPath = cliPath;
-		this.client = this.createClient();
 	}
 
-	private createClient(): CopilotClient {
-		const cliPath = this.cliPath || resolveDefaultCliPath();
+	private async createClient(): Promise<CopilotClient> {
+		const cliPath = this.cliPath || await resolveDefaultCliPath();
 		return new CopilotClient({
 			cliPath: cliPath,
 			autoStart: false,
@@ -95,6 +109,9 @@ export class CopilotService {
 	 * If the client is in a broken state, recreates it before starting.
 	 */
 	async ensureConnected(): Promise<void> {
+		if (!this.client) {
+			this.client = await this.createClient();
+		}
 		const state = this.client.getState();
 		if (state === 'connected') {
 			return;
@@ -102,14 +119,14 @@ export class CopilotService {
 		if (state === 'error') {
 			// Previous client is broken — tear it down and recreate.
 			try { await this.client.forceStop(); } catch { /* ignore */ }
-			this.client = this.createClient();
+			this.client = await this.createClient();
 		}
 		await this.client.start();
 	}
 
 	/** Current connection state. */
 	getState(): ConnectionState {
-		return this.client.getState();
+		return this.client?.getState() ?? 'disconnected';
 	}
 
 	// ── Authentication ──────────────────────────────────────────────
@@ -117,7 +134,7 @@ export class CopilotService {
 	/** Check the current authentication status against the Copilot backend. */
 	async getAuthStatus(): Promise<GetAuthStatusResponse> {
 		await this.ensureConnected();
-		return await this.client.getAuthStatus();
+		return await this.client!.getAuthStatus();
 	}
 
 	// ── Models ──────────────────────────────────────────────────────
@@ -125,7 +142,7 @@ export class CopilotService {
 	/** List available models with capabilities, policy and billing info. */
 	async listModels(): Promise<ModelInfo[]> {
 		await this.ensureConnected();
-		return await this.client.listModels();
+		return await this.client!.listModels();
 	}
 
 	// ── Sessions ────────────────────────────────────────────────────
@@ -138,7 +155,7 @@ export class CopilotService {
 	 */
 	async createSession(config: SessionConfig): Promise<CopilotSession> {
 		await this.ensureConnected();
-		return await this.client.createSession(config);
+		return await this.client!.createSession(config);
 	}
 
 	/**
@@ -152,8 +169,7 @@ export class CopilotService {
 		config?: Partial<SessionConfig>,
 	): Promise<CopilotSession> {
 		await this.ensureConnected();
-		return await this.client.resumeSession(sessionId, {
-			onPermissionRequest: approveAll,
+		return await this.client!.resumeSession(sessionId, {
 			...config,
 		});
 	}
@@ -161,19 +177,19 @@ export class CopilotService {
 	/** List all persisted sessions, optionally filtered. */
 	async listSessions(filter?: SessionListFilter): Promise<SessionMetadata[]> {
 		await this.ensureConnected();
-		return await this.client.listSessions(filter);
+		return await this.client!.listSessions(filter);
 	}
 
 	/** Permanently delete a session and its data. */
 	async deleteSession(sessionId: string): Promise<void> {
 		await this.ensureConnected();
-		return await this.client.deleteSession(sessionId);
+		return await this.client!.deleteSession(sessionId);
 	}
 
 	/** Get the most recently updated session ID, if any. */
 	async getLastSessionId(): Promise<string | undefined> {
 		await this.ensureConnected();
-		return await this.client.getLastSessionId();
+		return await this.client!.getLastSessionId();
 	}
 
 	// ── Convenience: one-shot chat ──────────────────────────────────
@@ -194,10 +210,12 @@ export class CopilotService {
 		model?: string;
 		systemMessage?: string;
 		customAgents?: CustomAgentConfig[];
+		onPermissionRequest?: PermissionHandler;
+		attachments?: MessageOptions['attachments'];
 	}): Promise<string | undefined> {
 		const session = await this.createSession({
 			model: options.model,
-			onPermissionRequest: approveAll,
+			onPermissionRequest: options.onPermissionRequest ?? approveAll,
 			customAgents: options.customAgents,
 			...(options.systemMessage
 				? {systemMessage: {content: options.systemMessage}}
@@ -205,11 +223,45 @@ export class CopilotService {
 		});
 		try {
 			const response: AssistantMessageEvent | undefined =
-				await session.sendAndWait({prompt: options.prompt});
+				await session.sendAndWait({
+					prompt: options.prompt,
+					...(options.attachments && options.attachments.length > 0 ? {attachments: options.attachments} : {}),
+				});
 			return response?.data.content;
 		} finally {
 			await session.destroy();
 		}
+	}
+
+	/**
+	 * Send a single prompt, wait for the response, and keep the session alive.
+	 * Like chat() but the session is NOT destroyed, so it persists in the
+	 * session list and can be resumed later.
+	 *
+	 * @returns Object containing the assistant's response content and the sessionId.
+	 */
+	async inlineChat(options: {
+		prompt: string;
+		model?: string;
+		systemMessage?: string;
+		customAgents?: CustomAgentConfig[];
+		onPermissionRequest?: PermissionHandler;
+		attachments?: MessageOptions['attachments'];
+	}): Promise<{content: string | undefined; sessionId: string}> {
+		const session = await this.createSession({
+			model: options.model,
+			onPermissionRequest: options.onPermissionRequest ?? approveAll,
+			customAgents: options.customAgents,
+			...(options.systemMessage
+				? {systemMessage: {content: options.systemMessage}}
+				: {}),
+		});
+		const response: AssistantMessageEvent | undefined =
+			await session.sendAndWait({
+				prompt: options.prompt,
+				...(options.attachments && options.attachments.length > 0 ? {attachments: options.attachments} : {}),
+			});
+		return {content: response?.data.content, sessionId: session.sessionId};
 	}
 
 	// ── Health ───────────────────────────────────────────────────────
@@ -217,7 +269,7 @@ export class CopilotService {
 	/** Ping the Copilot CLI server to verify connectivity. */
 	async ping(): Promise<{message: string; timestamp: number}> {
 		await this.ensureConnected();
-		return await this.client.ping();
+		return await this.client!.ping();
 	}
 
 	// ── Lifecycle ───────────────────────────────────────────────────
@@ -227,6 +279,7 @@ export class CopilotService {
 	 * Call this from the plugin's `onunload()`.
 	 */
 	async stop(): Promise<void> {
+		if (!this.client) return;
 		const errors = await this.client.stop();
 		if (errors.length > 0) {
 			console.error('Copilot service stop errors:', errors);

@@ -30,6 +30,7 @@ import {getAgentsFolder, getSkillsFolder, getToolsFolder, getPromptsFolder, getT
 import {TriggerScheduler} from './triggerScheduler';
 import type {TriggerFireContext} from './triggerScheduler';
 import {VaultScopeModal} from './vaultScopeModal';
+import {debugLog, debugTrace, setDebugEnabled} from './debug';
 
 export const SIDEKICK_VIEW_TYPE = 'sidekick-view';
 
@@ -294,6 +295,10 @@ export class SidekickView extends ItemView {
 	private streamingContent = '';
 	private renderScheduled = false;
 	private showDebugInfo = false;
+	/** Index up to which streamingContent has been fully re-rendered via Markdown. */
+	private lastFullRenderLen = 0;
+	/** Timer for periodic full markdown re-renders during streaming. */
+	private fullRenderTimer: ReturnType<typeof setTimeout> | null = null;
 
 	// ── Turn-level metadata ────────────────────────────────────
 	private turnStartTime = 0;
@@ -309,6 +314,8 @@ export class SidekickView extends ItemView {
 	private currentSessionId: string | null = null;
 	private sidebarWidth = 40;
 	private sessionFilter = '';
+	private sessionTypeFilter = new Set<'chat' | 'inline' | 'trigger' | 'other'>(['chat', 'trigger']);
+	private sessionSort: 'modified' | 'created' | 'name' = 'modified';
 
 	// ── DOM refs ─────────────────────────────────────────────────
 	private mainEl!: HTMLElement;
@@ -329,6 +336,9 @@ export class SidekickView extends ItemView {
 	private streamingComponent: Component | null = null;
 	private streamingWrapperEl: HTMLElement | null = null;
 
+	// ── Config file watcher ──────────────────────────────────────
+	private configRefreshTimer: ReturnType<typeof setTimeout> | null = null;
+
 	// ── Prompt dropdown DOM refs ─────────────────────────────────
 	private promptDropdown: HTMLElement | null = null;
 	private promptDropdownIndex = -1;
@@ -337,6 +347,9 @@ export class SidekickView extends ItemView {
 	private sidebarEl!: HTMLElement;
 	private sidebarListEl!: HTMLElement;
 	private sidebarSearchEl!: HTMLInputElement;
+	private sidebarFilterEl!: HTMLButtonElement;
+	private sidebarSortEl!: HTMLButtonElement;
+	private sidebarRefreshEl!: HTMLButtonElement;
 	private splitterEl!: HTMLElement;
 
 	private eventUnsubscribers: (() => void)[] = [];
@@ -373,6 +386,9 @@ export class SidekickView extends ItemView {
 		// Initialize trigger scheduler
 		this.initTriggerScheduler();
 
+		// Watch sidekick folder for config changes and auto-refresh
+		this.registerConfigFileWatcher();
+
 		// Track active note
 		this.updateActiveNote();
 		this.registerEvent(
@@ -381,6 +397,7 @@ export class SidekickView extends ItemView {
 	}
 
 	async onClose(): Promise<void> {
+		if (this.configRefreshTimer) clearTimeout(this.configRefreshTimer);
 		this.triggerScheduler?.stop();
 		await this.destroyAllSessions();
 	}
@@ -560,20 +577,10 @@ export class SidekickView extends ItemView {
 			this.selectedAgent = this.agentSelect.value;
 			const agent = this.agents.find(a => a.name === this.selectedAgent);
 			// Auto-select agent's preferred model
-			if (agent?.model) {
-				const target = agent.model.toLowerCase();
-				let modelMatch = this.models.find(
-					m => m.name.toLowerCase() === target || m.id.toLowerCase() === target
-				);
-				if (!modelMatch) {
-					modelMatch = this.models.find(
-						m => m.id.toLowerCase().includes(target) || m.name.toLowerCase().includes(target)
-					);
-				}
-				if (modelMatch) {
-					this.selectedModel = modelMatch.id;
-					this.modelSelect.value = modelMatch.id;
-				}
+			const resolvedModel = this.resolveModelForAgent(agent, this.selectedModel || undefined);
+			if (resolvedModel && resolvedModel !== this.selectedModel) {
+				this.selectedModel = resolvedModel;
+				this.modelSelect.value = resolvedModel;
 			}
 			// Apply agent's tools and skills filter
 			this.applyAgentToolsAndSkills(agent);
@@ -617,6 +624,7 @@ export class SidekickView extends ItemView {
 		debugCheck.checked = this.showDebugInfo;
 		debugCheck.addEventListener('change', () => {
 			this.showDebugInfo = debugCheck.checked;
+			setDebugEnabled(this.showDebugInfo);
 			this.chatContainer.toggleClass('sidekick-hide-debug', !this.showDebugInfo);
 		});
 		this.debugBtnEl.addEventListener('click', (e) => {
@@ -629,20 +637,29 @@ export class SidekickView extends ItemView {
 
 	// ── Config loading ───────────────────────────────────────────
 
-	private async loadAllConfigs(): Promise<void> {
+	private async loadAllConfigs(options?: {silent?: boolean}): Promise<void> {
 		try {
-			this.agents = await loadAgents(this.app, getAgentsFolder(this.plugin.settings));
-			this.skills = await loadSkills(this.app, getSkillsFolder(this.plugin.settings));
-			this.mcpServers = await loadMcpServers(this.app, getToolsFolder(this.plugin.settings));
-			this.prompts = await loadPrompts(this.app, getPromptsFolder(this.plugin.settings));
-			this.triggers = await loadTriggers(this.app, getTriggersFolder(this.plugin.settings));
+			// Parallel-load all config files (independent I/O)
+			const [agents, skills, mcpServers, prompts, triggers] = await Promise.all([
+				loadAgents(this.app, getAgentsFolder(this.plugin.settings)),
+				loadSkills(this.app, getSkillsFolder(this.plugin.settings)),
+				loadMcpServers(this.app, getToolsFolder(this.plugin.settings)),
+				loadPrompts(this.app, getPromptsFolder(this.plugin.settings)),
+				loadTriggers(this.app, getTriggersFolder(this.plugin.settings)),
+			]);
+			this.agents = agents;
+			this.skills = skills;
+			this.mcpServers = mcpServers;
+			this.prompts = prompts;
+			this.triggers = triggers;
 			this.triggerScheduler?.setTriggers(this.triggers);
 
 			// Enable all skills and tools by default (agent filter applied in updateConfigUI)
 			this.enabledSkills = new Set(this.skills.map(s => s.name));
 			this.enabledMcpServers = new Set(this.mcpServers.map(s => s.name));
 
-			if (this.plugin.copilot) {
+			// Skip model fetch during silent (auto-refresh) reloads
+			if (!options?.silent && this.plugin.copilot) {
 				try {
 					this.models = await this.plugin.copilot.listModels();
 				} catch (e) {
@@ -655,7 +672,46 @@ export class SidekickView extends ItemView {
 
 		this.updateConfigUI();
 		this.configDirty = true;
-		new Notice(`Loaded ${this.agents.length} agent(s), ${this.models.length} model(s), ${this.skills.length} skill(s), ${this.mcpServers.length} tool server(s), ${this.prompts.length} prompt(s), ${this.triggers.length} trigger(s).`);
+		if (options?.silent) {
+			new Notice('Configuration refreshed.');
+		} else {
+			new Notice(`Loaded ${this.agents.length} agent(s), ${this.models.length} model(s), ${this.skills.length} skill(s), ${this.mcpServers.length} tool server(s), ${this.prompts.length} prompt(s), ${this.triggers.length} trigger(s).`);
+		}
+	}
+
+	/**
+	 * Watch the sidekick folder for file changes and auto-refresh configs.
+	 * Debounces rapid changes (e.g. multiple saves) into a single reload.
+	 */
+	private registerConfigFileWatcher(): void {
+		const DEBOUNCE_MS = 500;
+
+		const scheduleRefresh = (filePath: string) => {
+			const base = normalizePath(this.plugin.settings.sidekickFolder);
+			if (!filePath.startsWith(base + '/')) return;
+			debugTrace(`Sidekick: config file changed: ${filePath}`);
+			if (this.configRefreshTimer) clearTimeout(this.configRefreshTimer);
+			this.configRefreshTimer = setTimeout(() => {
+				this.configRefreshTimer = null;
+				void this.loadAllConfigs({silent: true});
+			}, DEBOUNCE_MS);
+		};
+
+		this.registerEvent(
+			this.app.vault.on('modify', (file) => scheduleRefresh(file.path))
+		);
+		this.registerEvent(
+			this.app.vault.on('create', (file) => scheduleRefresh(file.path))
+		);
+		this.registerEvent(
+			this.app.vault.on('delete', (file) => scheduleRefresh(file.path))
+		);
+		this.registerEvent(
+			this.app.vault.on('rename', (file, oldPath) => {
+				scheduleRefresh(file.path);
+				scheduleRefresh(oldPath);
+			})
+		);
 	}
 
 	private updateConfigUI(): void {
@@ -676,19 +732,9 @@ export class SidekickView extends ItemView {
 
 		// Auto-select agent's preferred model
 		const selectedAgentConfig = this.agents.find(a => a.name === this.selectedAgent);
-		if (selectedAgentConfig?.model) {
-			const target = selectedAgentConfig.model.toLowerCase();
-			let modelMatch = this.models.find(
-				m => m.name.toLowerCase() === target || m.id.toLowerCase() === target
-			);
-			if (!modelMatch) {
-				modelMatch = this.models.find(
-					m => m.id.toLowerCase().includes(target) || m.name.toLowerCase().includes(target)
-				);
-			}
-			if (modelMatch) {
-				this.selectedModel = modelMatch.id;
-			}
+		const resolvedModel = this.resolveModelForAgent(selectedAgentConfig, this.selectedModel || undefined);
+		if (resolvedModel) {
+			this.selectedModel = resolvedModel;
 		}
 
 		// Models
@@ -754,6 +800,28 @@ export class SidekickView extends ItemView {
 				});
 			}
 		}
+		menu.addSeparator();
+		const currentApproval = this.plugin.settings.toolApproval;
+		menu.addItem(item => {
+			item.setTitle('Approval mode');
+			const sub: Menu = (item as unknown as {setSubmenu: () => Menu}).setSubmenu();
+			sub.addItem(si => {
+				si.setTitle('Allow (auto-approve)')
+					.setChecked(currentApproval === 'allow')
+					.onClick(async () => {
+						this.plugin.settings.toolApproval = 'allow';
+						await this.plugin.saveSettings();
+					});
+			});
+			sub.addItem(si => {
+				si.setTitle('Ask (require approval)')
+					.setChecked(currentApproval === 'ask')
+					.onClick(async () => {
+						this.plugin.settings.toolApproval = 'ask';
+						await this.plugin.saveSettings();
+					});
+			});
+		});
 		menu.showAtMouseEvent(e);
 	}
 
@@ -827,6 +895,12 @@ export class SidekickView extends ItemView {
 		}
 	}
 
+	/** Set the vault scope programmatically and refresh the scope bar. */
+	public setScope(paths: string[]): void {
+		this.scopePaths = paths;
+		this.renderScopeBar();
+	}
+
 	private renderScopeBar(): void {
 		this.scopeBar.empty();
 		if (this.scopePaths.length === 0) {
@@ -870,9 +944,12 @@ export class SidekickView extends ItemView {
 		// Update working directory to the parent folder of the active note
 		if (file) {
 			const lastSlash = file.path.lastIndexOf('/');
-			this.workingDir = lastSlash > 0 ? file.path.substring(0, lastSlash) : '';
-			this.updateCwdButton();
-			this.configDirty = true;
+			const newDir = lastSlash > 0 ? file.path.substring(0, lastSlash) : '';
+			if (newDir !== this.workingDir) {
+				this.workingDir = newDir;
+				this.updateCwdButton();
+				this.configDirty = true;
+			}
 		}
 	}
 
@@ -923,7 +1000,7 @@ export class SidekickView extends ItemView {
 					console.warn('Sidekick: could not resolve OS path for', file.name);
 					continue;
 				}
-				console.log('Sidekick: attached OS file', file.name, filePath);
+				debugLog('Sidekick: attached OS file', file.name, filePath);
 				this.attachments.push({type: 'file', name: file.name, path: filePath, absolutePath: true});
 			}
 			this.renderAttachments();
@@ -1075,21 +1152,10 @@ export class SidekickView extends ItemView {
 			if (matchingAgent) {
 				this.selectedAgent = matchingAgent.name;
 				this.agentSelect.value = matchingAgent.name;
-				// Also set the agent's preferred model
-				if (matchingAgent.model) {
-					const target = matchingAgent.model.toLowerCase();
-					let modelMatch = this.models.find(
-						m => m.name.toLowerCase() === target || m.id.toLowerCase() === target
-					);
-					if (!modelMatch) {
-						modelMatch = this.models.find(
-							m => m.id.toLowerCase().includes(target) || m.name.toLowerCase().includes(target)
-						);
-					}
-					if (modelMatch) {
-						this.selectedModel = modelMatch.id;
-						this.modelSelect.value = modelMatch.id;
-					}
+				const resolvedModel = this.resolveModelForAgent(matchingAgent, this.selectedModel || undefined);
+				if (resolvedModel && resolvedModel !== this.selectedModel) {
+					this.selectedModel = resolvedModel;
+					this.modelSelect.value = resolvedModel;
 				}
 				this.configDirty = true;
 			}
@@ -1109,15 +1175,40 @@ export class SidekickView extends ItemView {
 		this.sidebarEl = parent.createDiv({cls: 'sidekick-sidebar'});
 		this.sidebarEl.style.width = `${this.sidebarWidth}px`;
 
-		// Header: new session button + search
+		// Header: new session button + filter + sort + search
 		const header = this.sidebarEl.createDiv({cls: 'sidekick-sidebar-header'});
 
-		const newBtn = header.createEl('button', {
+		const headerBtnRow = header.createDiv({cls: 'sidekick-sidebar-btn-row'});
+
+		const newBtn = headerBtnRow.createEl('button', {
 			cls: 'clickable-icon sidekick-icon-btn sidekick-sidebar-new-btn',
 			attr: {title: 'New session'},
 		});
 		setIcon(newBtn, 'plus');
 		newBtn.addEventListener('click', () => void this.newConversation());
+
+		this.sidebarFilterEl = headerBtnRow.createEl('button', {
+			cls: 'clickable-icon sidekick-sidebar-filter-btn',
+			attr: {title: 'Filter sessions by type'},
+		});
+		setIcon(this.sidebarFilterEl, 'filter');
+		this.sidebarFilterEl.addEventListener('click', (e) => this.openSessionFilterMenu(e));
+		this.updateFilterBadge();
+
+		this.sidebarSortEl = headerBtnRow.createEl('button', {
+			cls: 'clickable-icon sidekick-sidebar-sort-btn',
+			attr: {title: 'Sort sessions'},
+		});
+		setIcon(this.sidebarSortEl, 'arrow-up-down');
+		this.sidebarSortEl.addEventListener('click', (e) => this.openSessionSortMenu(e));
+		this.updateSortBadge();
+
+		this.sidebarRefreshEl = headerBtnRow.createEl('button', {
+			cls: 'clickable-icon sidekick-sidebar-refresh-btn',
+			attr: {title: 'Refresh sessions'},
+		});
+		setIcon(this.sidebarRefreshEl, 'refresh-cw');
+		this.sidebarRefreshEl.addEventListener('click', () => void this.loadSessions());
 
 		this.sidebarSearchEl = header.createEl('input', {
 			type: 'text',
@@ -1145,7 +1236,6 @@ export class SidekickView extends ItemView {
 			const newWidth = Math.max(40, Math.min(300, startWidth + dx));
 			this.sidebarWidth = newWidth;
 			this.sidebarEl.style.width = `${newWidth}px`;
-			this.renderSessionList();
 		};
 
 		const onMouseUp = () => {
@@ -1154,6 +1244,8 @@ export class SidekickView extends ItemView {
 			document.removeEventListener('mouseup', onMouseUp);
 			this.splitterEl.removeClass('is-dragging');
 			document.body.removeClass('sidekick-no-select');
+			// Re-render session list once on drag end instead of every mousemove
+			this.renderSessionList();
 		};
 
 		this.splitterEl.addEventListener('mousedown', (e) => {
@@ -1177,15 +1269,36 @@ export class SidekickView extends ItemView {
 		if (!this.plugin.copilot) return;
 		try {
 			this.sessionList = await this.plugin.copilot.listSessions();
-			// Sort by modifiedTime, newest first
-			this.sessionList.sort((a, b) => {
-				const ta = a.modifiedTime instanceof Date ? a.modifiedTime.getTime() : new Date(a.modifiedTime).getTime();
-				const tb = b.modifiedTime instanceof Date ? b.modifiedTime.getTime() : new Date(b.modifiedTime).getTime();
-				return tb - ta;
-			});
+			this.sortSessionList();
 			this.renderSessionList();
 		} catch (e) {
 			console.warn('Sidekick: failed to load sessions', e);
+		}
+	}
+
+	private sortSessionList(): void {
+		switch (this.sessionSort) {
+			case 'modified':
+				this.sessionList.sort((a, b) => {
+					const ta = a.modifiedTime instanceof Date ? a.modifiedTime.getTime() : new Date(a.modifiedTime).getTime();
+					const tb = b.modifiedTime instanceof Date ? b.modifiedTime.getTime() : new Date(b.modifiedTime).getTime();
+					return tb - ta;
+				});
+				break;
+			case 'created':
+				this.sessionList.sort((a, b) => {
+					const ta = a.startTime instanceof Date ? a.startTime.getTime() : new Date(a.startTime).getTime();
+					const tb = b.startTime instanceof Date ? b.startTime.getTime() : new Date(b.startTime).getTime();
+					return tb - ta;
+				});
+				break;
+			case 'name':
+				this.sessionList.sort((a, b) => {
+					const na = this.getSessionDisplayName(a).toLowerCase();
+					const nb = this.getSessionDisplayName(b).toLowerCase();
+					return na.localeCompare(nb);
+				});
+				break;
 		}
 	}
 
@@ -1194,12 +1307,27 @@ export class SidekickView extends ItemView {
 		this.sidebarListEl.empty();
 
 		const isExpanded = this.sidebarWidth > 80;
-		// Show/hide search based on width
+		// Show/hide search and filter/sort/refresh when collapsed
 		if (this.sidebarSearchEl) {
 			this.sidebarSearchEl.style.display = isExpanded ? '' : 'none';
 		}
+		if (this.sidebarFilterEl) {
+			this.sidebarFilterEl.style.display = isExpanded ? '' : 'none';
+		}
+		if (this.sidebarSortEl) {
+			this.sidebarSortEl.style.display = isExpanded ? '' : 'none';
+		}
+		if (this.sidebarRefreshEl) {
+			this.sidebarRefreshEl.style.display = isExpanded ? '' : 'none';
+		}
 
 		for (const session of this.sessionList) {
+			// Apply type filter
+			if (this.sessionTypeFilter.size > 0) {
+				const type = this.getSessionType(session);
+				if (!this.sessionTypeFilter.has(type)) continue;
+			}
+
 			const name = this.getSessionDisplayName(session);
 			if (this.sessionFilter && !name.toLowerCase().includes(this.sessionFilter)) continue;
 
@@ -1207,8 +1335,10 @@ export class SidekickView extends ItemView {
 			const isActive = session.sessionId === this.currentSessionId;
 			if (isActive) item.addClass('is-active');
 
+			const sessionType = this.getSessionType(session);
+			const iconName = sessionType === 'chat' ? 'message-square' : sessionType === 'trigger' ? 'zap' : sessionType === 'inline' ? 'file-text' : 'code';
 			const iconEl = item.createSpan({cls: 'sidekick-session-icon'});
-			setIcon(iconEl, 'message-square');
+			setIcon(iconEl, iconName);
 
 			// Green active dot when processing (current or background session)
 			const isCurrentStreaming = isActive && this.isStreaming;
@@ -1234,9 +1364,114 @@ export class SidekickView extends ItemView {
 	}
 
 	private getSessionDisplayName(session: SessionMetadata): string {
-		return this.sessionNames[session.sessionId]
+		const raw = this.sessionNames[session.sessionId]
 			|| session.summary
 			|| `Session ${session.sessionId.slice(0, 8)}`;
+		// Strip session type prefix for display
+		return raw.replace(/^\[(chat|inline|trigger)\]\s*/, '');
+	}
+
+	/** Return the session type prefix: 'chat', 'inline', 'trigger', or 'other'. */
+	private getSessionType(session: SessionMetadata): 'chat' | 'inline' | 'trigger' | 'other' {
+		const name = this.sessionNames[session.sessionId] || '';
+		debugTrace(`Sidekick: getSessionType id=${session.sessionId.slice(0, 8)} name="${name.slice(0, 40)}"`);
+		if (name.startsWith('[chat]')) return 'chat';
+		if (name.startsWith('[inline]')) return 'inline';
+		if (name.startsWith('[trigger]')) return 'trigger';
+		return 'other';
+	}
+
+	private openSessionFilterMenu(e: MouseEvent): void {
+		const menu = new Menu();
+		const types: Array<{value: 'chat' | 'inline' | 'trigger' | 'other'; label: string}> = [
+			{value: 'chat', label: 'Chat'},
+			{value: 'trigger', label: 'Triggers'},
+			{value: 'inline', label: 'Inline'},
+			{value: 'other', label: 'Other'},
+		];
+		for (const {value, label} of types) {
+			menu.addItem(item => {
+				item.setTitle(label)
+					.setChecked(this.sessionTypeFilter.has(value))
+					.onClick(() => {
+						if (this.sessionTypeFilter.has(value)) {
+							this.sessionTypeFilter.delete(value);
+						} else {
+							this.sessionTypeFilter.add(value);
+						}
+						this.updateFilterBadge();
+						this.renderSessionList();
+					});
+			});
+		}
+		menu.addSeparator();
+		menu.addItem(item => {
+			item.setTitle('Show all')
+				.onClick(() => {
+					this.sessionTypeFilter.clear();
+					this.updateFilterBadge();
+					this.renderSessionList();
+				});
+		});
+		menu.showAtMouseEvent(e);
+	}
+
+	private updateFilterBadge(): void {
+		// When no types selected (show all), dim the icon; otherwise mark active
+		const hasFilter = this.sessionTypeFilter.size > 0;
+		this.sidebarFilterEl.toggleClass('is-active', hasFilter);
+		this.sidebarFilterEl.setAttribute('title',
+			hasFilter
+				? `Filter: ${[...this.sessionTypeFilter].join(', ')}`
+				: 'Filter sessions (showing all)');
+	}
+
+	private openSessionSortMenu(e: MouseEvent): void {
+		const menu = new Menu();
+		const sorts: Array<{value: 'modified' | 'created' | 'name'; label: string}> = [
+			{value: 'modified', label: 'Modified date'},
+			{value: 'created', label: 'Created date'},
+			{value: 'name', label: 'Name'},
+		];
+		for (const {value, label} of sorts) {
+			menu.addItem(item => {
+				item.setTitle(label)
+					.setChecked(this.sessionSort === value)
+					.onClick(() => {
+						this.sessionSort = value;
+						this.updateSortBadge();
+						this.sortSessionList();
+						this.renderSessionList();
+					});
+			});
+		}
+		menu.showAtMouseEvent(e);
+	}
+
+	private updateSortBadge(): void {
+		const labels: Record<string, string> = {modified: 'Modified', created: 'Created', name: 'Name'};
+		this.sidebarSortEl.setAttribute('title', `Sort: ${labels[this.sessionSort]}`);
+	}
+
+	/**
+	 * Public API: register an inline session so it appears in the sidebar.
+	 * Called by editorMenu after completing an inline operation.
+	 */
+	public registerInlineSession(sessionId: string, description: string): void {
+		this.sessionNames[sessionId] = `[inline] ${description}`;
+		this.saveSessionNames();
+
+		// Add to session list immediately so sidebar updates
+		if (!this.sessionList.some(s => s.sessionId === sessionId)) {
+			const now = new Date();
+			this.sessionList.unshift({
+				sessionId,
+				startTime: now,
+				modifiedTime: now,
+				isRemote: false,
+			} as SessionMetadata);
+		}
+		this.renderSessionList();
 	}
 
 	// ── Background session management ────────────────────────────
@@ -1248,6 +1483,33 @@ export class SidekickView extends ItemView {
 	 */
 	private saveCurrentToBackground(): void {
 		if (!this.currentSession || !this.currentSessionId) return;
+
+		// Evict the oldest idle background session if at capacity
+		const MAX_BACKGROUND_SESSIONS = 8;
+		if (this.activeSessions.size >= MAX_BACKGROUND_SESSIONS) {
+			let oldestKey: string | null = null;
+			let oldestTime = Infinity;
+			for (const [key, bg] of this.activeSessions) {
+				if (bg.isStreaming) continue; // don't evict active streams
+				const entry = this.sessionList.find(s => s.sessionId === key);
+				const t = entry?.modifiedTime instanceof Date
+					? entry.modifiedTime.getTime()
+					: entry ? new Date(entry.modifiedTime).getTime() : 0;
+				if (t < oldestTime) {
+					oldestTime = t;
+					oldestKey = key;
+				}
+			}
+			if (oldestKey) {
+				const evicted = this.activeSessions.get(oldestKey);
+				if (evicted) {
+					for (const unsub of evicted.unsubscribers) unsub();
+					evicted.savedDom = null; // release DOM fragment
+					try { void evicted.session.destroy(); } catch { /* ignore */ }
+					this.activeSessions.delete(oldestKey);
+				}
+			}
+		}
 
 		// Detach events from foreground routing
 		this.unsubscribeEvents();
@@ -1449,7 +1711,9 @@ export class SidekickView extends ItemView {
 	 * Restore the agent and model dropdowns from a session's saved name.
 	 */
 	private restoreAgentFromSessionName(sessionId: string): void {
-		const sessionName = this.sessionNames[sessionId] || '';
+		let sessionName = this.sessionNames[sessionId] || '';
+		// Strip session type prefix
+		sessionName = sessionName.replace(/^\[(chat|inline|trigger)\]\s*/, '');
 		const colonIdx = sessionName.indexOf(':');
 		if (colonIdx > 0) {
 			const agentName = sessionName.substring(0, colonIdx).trim();
@@ -1457,20 +1721,10 @@ export class SidekickView extends ItemView {
 			if (matchingAgent) {
 				this.selectedAgent = matchingAgent.name;
 				this.agentSelect.value = matchingAgent.name;
-				if (matchingAgent.model) {
-					const target = matchingAgent.model.toLowerCase();
-					let modelMatch = this.models.find(
-						m => m.name.toLowerCase() === target || m.id.toLowerCase() === target
-					);
-					if (!modelMatch) {
-						modelMatch = this.models.find(
-							m => m.id.toLowerCase().includes(target) || m.name.toLowerCase().includes(target)
-						);
-					}
-					if (modelMatch) {
-						this.selectedModel = modelMatch.id;
-						this.modelSelect.value = modelMatch.id;
-					}
+				const resolvedModel = this.resolveModelForAgent(matchingAgent, this.selectedModel || undefined);
+				if (resolvedModel && resolvedModel !== this.selectedModel) {
+					this.selectedModel = resolvedModel;
+					this.modelSelect.value = resolvedModel;
 				}
 			}
 		}
@@ -1510,20 +1764,15 @@ export class SidekickView extends ItemView {
 		// ── Otherwise, resume from SDK (cold load) ──
 
 		try {
-			// Build config for resumed session
-			const permissionHandler = (request: PermissionRequest) => {
-				if (this.plugin.settings.toolApproval === 'allow') {
-					return approveAll(request, {sessionId: ''});
-				}
-				const modal = new ToolApprovalModal(this.app, request);
-				modal.open();
-				return modal.promise;
-			};
+			// Build full session config so skills, MCP servers, etc. are available
+			const agent = this.agents.find(a => a.name === this.selectedAgent);
+			const sessionConfig = this.buildSessionConfig({
+				model: this.selectedModel || undefined,
+				systemContent: agent?.instructions || undefined,
+			});
 
 			this.currentSession = await this.plugin.copilot!.resumeSession(sessionId, {
-				streaming: true,
-				onPermissionRequest: permissionHandler,
-				workingDirectory: this.getWorkingDirectory(),
+				...sessionConfig,
 			});
 			this.currentSessionId = sessionId;
 			this.configDirty = false;
@@ -1594,13 +1843,18 @@ export class SidekickView extends ItemView {
 	}
 
 	private renameSession(sessionId: string): void {
-		const currentName = this.sessionNames[sessionId] || '';
+		const rawName = this.sessionNames[sessionId] || '';
+		// Extract prefix and display name
+		const prefixMatch = rawName.match(/^(\[(chat|inline|trigger)\]\s*)/);
+		const prefix = prefixMatch ? prefixMatch[1] : '';
+		const displayName = prefix ? rawName.slice(prefix.length) : rawName;
+
 		const modal = new Modal(this.app);
 		modal.titleEl.setText('Rename session');
 
 		const input = modal.contentEl.createEl('input', {
 			type: 'text',
-			value: currentName,
+			value: displayName,
 			cls: 'sidekick-rename-input',
 		});
 		input.style.width = '100%';
@@ -1611,7 +1865,7 @@ export class SidekickView extends ItemView {
 		saveBtn.addEventListener('click', () => {
 			const newName = input.value.trim();
 			if (newName) {
-				this.sessionNames[sessionId] = newName;
+				this.sessionNames[sessionId] = `${prefix}${newName}`;
 				this.saveSessionNames();
 				this.renderSessionList();
 			}
@@ -1706,7 +1960,7 @@ export class SidekickView extends ItemView {
 			},
 		});
 		this.triggerScheduler.setTriggers(this.triggers);
-		console.log(`Sidekick: trigger scheduler initialized with ${this.triggers.length} trigger(s)`,
+		debugLog(`Sidekick: trigger scheduler initialized with ${this.triggers.length} trigger(s)`,
 			this.triggers.map(t => ({name: t.name, entries: t.triggers.map(e => ({type: e.type, cron: e.cron, glob: e.glob}))})));
 		const intervalId = this.triggerScheduler.start();
 		this.registerInterval(intervalId);
@@ -1717,10 +1971,10 @@ export class SidekickView extends ItemView {
 			this.app.vault.on('modify', (file) => {
 				if (!(file instanceof TFile)) return;
 				if (file.path.startsWith(sidekickFolder + '/') || file.path.startsWith('.sidekick-attachments/')) {
-					console.debug(`Sidekick: ignoring modify in excluded folder: ${file.path}`);
+					debugTrace(`Sidekick: ignoring modify in excluded folder: ${file.path}`);
 					return;
 				}
-				console.debug(`Sidekick: vault modify event: ${file.path}`);
+				debugTrace(`Sidekick: vault modify event: ${file.path}`);
 				this.triggerScheduler?.checkFileChangeTriggers(file.path);
 			})
 		);
@@ -1728,7 +1982,7 @@ export class SidekickView extends ItemView {
 			this.app.vault.on('create', (file) => {
 				if (!(file instanceof TFile)) return;
 				if (file.path.startsWith(sidekickFolder + '/') || file.path.startsWith('.sidekick-attachments/')) return;
-				console.debug(`Sidekick: vault create event: ${file.path}`);
+				debugTrace(`Sidekick: vault create event: ${file.path}`);
 				this.triggerScheduler?.checkFileChangeTriggers(file.path);
 			})
 		);
@@ -1736,7 +1990,7 @@ export class SidekickView extends ItemView {
 			this.app.vault.on('rename', (file, oldPath) => {
 				if (!(file instanceof TFile)) return;
 				if (file.path.startsWith(sidekickFolder + '/') || file.path.startsWith('.sidekick-attachments/')) return;
-				console.debug(`Sidekick: vault rename event: ${oldPath} → ${file.path}`);
+				debugTrace(`Sidekick: vault rename event: ${oldPath} → ${file.path}`);
 				this.triggerScheduler?.checkFileChangeTriggers(file.path);
 			})
 		);
@@ -1756,90 +2010,20 @@ export class SidekickView extends ItemView {
 		try {
 			// Resolve agent and model
 			const agent = trigger.agent ? this.agents.find(a => a.name === trigger.agent) : undefined;
-			let model = this.selectedModel || undefined;
-			if (agent?.model) {
-				const target = agent.model.toLowerCase();
-				let modelMatch = this.models.find(
-					m => m.name.toLowerCase() === target || m.id.toLowerCase() === target
-				);
-				if (!modelMatch) {
-					modelMatch = this.models.find(
-						m => m.id.toLowerCase().includes(target) || m.name.toLowerCase().includes(target)
-					);
-				}
-				if (modelMatch) model = modelMatch.id;
-			}
+			const model = this.resolveModelForAgent(agent, this.selectedModel || undefined);
 
 			// System message from agent instructions
-			let systemContent = '';
-			if (agent?.instructions) systemContent = agent.instructions;
+			const systemContent = agent?.instructions || undefined;
 
-			// MCP servers (same as current UI selection)
-			const mcpServers: Record<string, MCPServerConfig> = {};
-			for (const server of this.mcpServers) {
-				if (!this.enabledMcpServers.has(server.name)) continue;
-				const cfg = server.config;
-				const serverType = cfg['type'] as string | undefined;
-				const tools = (cfg['tools'] as string[] | undefined) ?? ['*'];
-				if (serverType === 'http' || serverType === 'sse') {
-					mcpServers[server.name] = {
-						type: serverType,
-						url: cfg['url'] as string,
-						tools,
-						...(cfg['headers'] ? {headers: cfg['headers'] as Record<string, string>} : {}),
-						...(cfg['timeout'] != null ? {timeout: cfg['timeout'] as number} : {}),
-					} as MCPServerConfig;
-				} else if (cfg['command']) {
-					mcpServers[server.name] = {
-						type: 'local',
-						command: cfg['command'] as string,
-						args: (cfg['args'] as string[] | undefined) ?? [],
-						tools,
-						...(cfg['env'] ? {env: cfg['env'] as Record<string, string>} : {}),
-						...(cfg['cwd'] ? {cwd: cfg['cwd'] as string} : {}),
-						...(cfg['timeout'] != null ? {timeout: cfg['timeout'] as number} : {}),
-					} as MCPServerConfig;
-				}
-			}
-
-			// Skills
-			const basePath = this.getVaultBasePath();
-			const skillDirs: string[] = [];
-			if (this.skills.length > 0) {
-				skillDirs.push(basePath + '/' + getSkillsFolder(this.plugin.settings));
-			}
-			const disabledSkills = this.skills
-				.filter(s => !this.enabledSkills.has(s.name))
-				.map(s => s.name);
-
-			// Permission handler
-			const permissionHandler = (request: PermissionRequest) => {
-				if (this.plugin.settings.toolApproval === 'allow') {
-					return approveAll(request, {sessionId: ''});
-				}
-				const modal = new ToolApprovalModal(this.app, request);
-				modal.open();
-				return modal.promise;
-			};
-
-			const sessionConfig: SessionConfig = {
-				model,
-				streaming: true,
-				onPermissionRequest: permissionHandler,
-				workingDirectory: this.getWorkingDirectory(),
-				...(Object.keys(mcpServers).length > 0 ? {mcpServers} : {}),
-				...(skillDirs.length > 0 ? {skillDirectories: skillDirs} : {}),
-				...(disabledSkills.length > 0 ? {disabledSkills} : {}),
-				...(systemContent ? {systemMessage: {mode: 'append' as const, content: systemContent}} : {}),
-			};
+			const sessionConfig = this.buildSessionConfig({model, systemContent});
 
 			const session = await this.plugin.copilot.createSession(sessionConfig);
 			const sessionId = session.sessionId;
 
-			// Name the session: <agent>: <content truncated> [trigger]
+			// Name the session: [trigger] <agent>: <content truncated>
 			const agentName = trigger.agent || 'Chat';
 			const truncatedContent = trigger.content.length > 40 ? trigger.content.slice(0, 40) + '…' : trigger.content;
-			const sessionName = `${agentName}: ${truncatedContent} [trigger]`;
+			const sessionName = `[trigger] ${agentName}: ${truncatedContent}`;
 			this.sessionNames[sessionId] = sessionName;
 			this.saveSessionNames();
 
@@ -1890,7 +2074,7 @@ export class SidekickView extends ItemView {
 			this.renderSessionList();
 
 			// Send the trigger content
-			console.log(`Sidekick: firing trigger "${trigger.name}"`, {prompt: prompt.slice(0, 200)});
+			debugLog(`Sidekick: firing trigger "${trigger.name}"`, {prompt: prompt.slice(0, 200)});
 			await session.send({prompt});
 
 			new Notice(`Trigger fired: ${trigger.description || trigger.name}`);
@@ -1971,8 +2155,14 @@ export class SidekickView extends ItemView {
 					chip.setAttribute('title', 'Open with OS default application');
 					chip.addEventListener('click', () => {
 						try {
+							const filePath = att.path!;
+							// Reject paths with traversal sequences
+							if (/\.\.[\/\\]/.test(filePath)) {
+								new Notice('Cannot open file: path contains directory traversal.');
+								return;
+							}
 							const {shell} = require('electron') as {shell: {openPath: (p: string) => Promise<string>}};
-							void shell.openPath(att.path!);
+							void shell.openPath(filePath);
 						} catch (e) {
 							new Notice(`Failed to open file: ${String(e)}`);
 						}
@@ -1982,8 +2172,14 @@ export class SidekickView extends ItemView {
 					chip.setAttribute('title', 'Open with OS image viewer');
 					chip.addEventListener('click', () => {
 						try {
+							const vaultPath = normalizePath(att.path!);
+							// Reject paths that escape the vault via traversal
+							if (vaultPath.startsWith('..') || vaultPath.includes('/../')) {
+								new Notice('Cannot open image: path escapes the vault.');
+								return;
+							}
 							const {shell} = require('electron') as {shell: {openPath: (p: string) => Promise<string>}};
-							const absPath = this.getVaultBasePath() + '/' + normalizePath(att.path!);
+							const absPath = this.getVaultBasePath() + '/' + vaultPath;
 							void shell.openPath(absPath);
 						} catch (e) {
 							new Notice(`Failed to open image: ${String(e)}`);
@@ -2095,9 +2291,44 @@ export class SidekickView extends ItemView {
 			this.renderScheduled = true;
 			window.requestAnimationFrame(() => {
 				this.renderScheduled = false;
-				void this.updateStreamingRender();
+				this.updateStreamingRenderIncremental();
 			});
 		}
+	}
+
+	/**
+	 * Append only the new delta text as a plain text node.
+	 * A periodic timer does full markdown re-renders every 300ms
+	 * to resolve cross-boundary syntax (code blocks, lists, etc.).
+	 */
+	private updateStreamingRenderIncremental(): void {
+		if (!this.streamingBodyEl) return;
+
+		const newText = this.streamingContent.slice(this.lastFullRenderLen);
+		if (newText) {
+			// Append raw text node for immediate visual feedback
+			this.streamingBodyEl.appendText(newText);
+			this.lastFullRenderLen = this.streamingContent.length;
+		}
+
+		// Schedule a periodic full re-render if not already scheduled
+		if (!this.fullRenderTimer) {
+			this.fullRenderTimer = setTimeout(() => {
+				this.fullRenderTimer = null;
+				void this.doFullStreamingRender();
+			}, 300);
+		}
+
+		this.scrollToBottom();
+	}
+
+	/** Full markdown re-render of the entire streamed content so far. */
+	private async doFullStreamingRender(): Promise<void> {
+		if (!this.streamingBodyEl) return;
+		this.streamingBodyEl.empty();
+		await this.renderMarkdownSafe(this.streamingContent, this.streamingBodyEl);
+		this.lastFullRenderLen = this.streamingContent.length;
+		this.scrollToBottom();
 	}
 
 	private async updateStreamingRender(): Promise<void> {
@@ -2108,6 +2339,9 @@ export class SidekickView extends ItemView {
 	}
 
 	private finalizeStreamingMessage(): void {
+		// Always remove any lingering thinking/processing indicator
+		this.removeProcessingIndicator();
+
 		if (this.streamingContent) {
 			const msg: ChatMessage = {
 				id: `a-${Date.now()}`,
@@ -2117,6 +2351,24 @@ export class SidekickView extends ItemView {
 			};
 			this.messages.push(msg);
 		}
+
+		// Clean up incremental render timer and do final full render
+		if (this.fullRenderTimer) {
+			clearTimeout(this.fullRenderTimer);
+			this.fullRenderTimer = null;
+		}
+		if (this.streamingBodyEl && this.streamingContent) {
+			this.streamingBodyEl.empty();
+			void this.renderMarkdownSafe(this.streamingContent, this.streamingBodyEl);
+		} else if (this.streamingBodyEl && !this.streamingContent) {
+			// No text was streamed — show a subtle fallback
+			this.streamingBodyEl.empty();
+			this.streamingBodyEl.createDiv({
+				cls: 'sidekick-thinking sidekick-cancelled',
+				text: 'No response',
+			});
+		}
+		this.lastFullRenderLen = 0;
 
 		// Render metadata footer
 		this.renderMessageMetadata();
@@ -2140,10 +2392,15 @@ export class SidekickView extends ItemView {
 
 		this.isStreaming = false;
 		this.updateSendButton();
-		this.renderSessionList();  // Update active indicator
 
-		// Refresh session list from SDK now that the turn is complete
-		void this.loadSessions();
+		// Update local session timestamp instead of full SDK round-trip
+		if (this.currentSessionId) {
+			const entry = this.sessionList.find(s => s.sessionId === this.currentSessionId);
+			if (entry) {
+				entry.modifiedTime = new Date();
+			}
+		}
+		this.renderSessionList();
 	}
 
 	private renderMessageMetadata(): void {
@@ -2327,20 +2584,10 @@ export class SidekickView extends ItemView {
 			if (matchingAgent) {
 				this.selectedAgent = matchingAgent.name;
 				this.agentSelect.value = matchingAgent.name;
-				if (matchingAgent.model) {
-					const target = matchingAgent.model.toLowerCase();
-					let modelMatch = this.models.find(
-						m => m.name.toLowerCase() === target || m.id.toLowerCase() === target
-					);
-					if (!modelMatch) {
-						modelMatch = this.models.find(
-							m => m.id.toLowerCase().includes(target) || m.name.toLowerCase().includes(target)
-						);
-					}
-					if (modelMatch) {
-						this.selectedModel = modelMatch.id;
-						this.modelSelect.value = modelMatch.id;
-					}
+				const resolvedModel = this.resolveModelForAgent(matchingAgent, this.selectedModel || undefined);
+				if (resolvedModel && resolvedModel !== this.selectedModel) {
+					this.selectedModel = resolvedModel;
+					this.modelSelect.value = resolvedModel;
 				}
 			}
 		}
@@ -2370,7 +2617,7 @@ export class SidekickView extends ItemView {
 			if (this.currentSessionId && !this.sessionNames[this.currentSessionId]) {
 				const agentName = this.selectedAgent || 'Chat';
 				const truncated = prompt.length > 40 ? prompt.slice(0, 40) + '…' : prompt;
-				this.sessionNames[this.currentSessionId] = `${agentName}: ${truncated}`;
+				this.sessionNames[this.currentSessionId] = `[chat] ${agentName}: ${truncated}`;
 				this.saveSessionNames();
 				this.renderSessionList();
 			}
@@ -2378,7 +2625,7 @@ export class SidekickView extends ItemView {
 			const sdkAttachments = this.buildSdkAttachments(currentAttachments);
 			const fullPrompt = this.buildPrompt(sendPrompt, currentAttachments);
 
-			console.log('Sidekick: sending message', {
+			debugLog('Sidekick: sending message', {
 				prompt: fullPrompt.slice(0, 200),
 				attachments: sdkAttachments,
 				scopePaths: this.scopePaths,
@@ -2444,78 +2691,10 @@ export class SidekickView extends ItemView {
 		}
 
 		const agent = this.agents.find(a => a.name === this.selectedAgent);
-		const model = this.selectedModel || undefined;
-
-		// System message from agent instructions
-		let systemContent = '';
-		if (agent?.instructions) {
-			systemContent = agent.instructions;
-		}
-
-		// MCP servers — pass config through to the SDK, only defaulting required fields
-		const mcpServers: Record<string, MCPServerConfig> = {};
-		for (const server of this.mcpServers) {
-			if (!this.enabledMcpServers.has(server.name)) continue;
-			const cfg = server.config;
-			const serverType = cfg['type'] as string | undefined;
-			const tools = (cfg['tools'] as string[] | undefined) ?? ['*'];
-
-			if (serverType === 'http' || serverType === 'sse') {
-				mcpServers[server.name] = {
-					type: serverType,
-					url: cfg['url'] as string,
-					tools,
-					...(cfg['headers'] ? {headers: cfg['headers'] as Record<string, string>} : {}),
-					...(cfg['timeout'] != null ? {timeout: cfg['timeout'] as number} : {}),
-				} as MCPServerConfig;
-			} else if (cfg['command']) {
-				mcpServers[server.name] = {
-					type: 'local',
-					command: cfg['command'] as string,
-					args: (cfg['args'] as string[] | undefined) ?? [],
-					tools,
-					...(cfg['env'] ? {env: cfg['env'] as Record<string, string>} : {}),
-					...(cfg['cwd'] ? {cwd: cfg['cwd'] as string} : {}),
-					...(cfg['timeout'] != null ? {timeout: cfg['timeout'] as number} : {}),
-				} as MCPServerConfig;
-			} else {
-				console.warn(`Sidekick: skipping MCP server "${server.name}" — no type/url or command found`);
-			}
-		}
-
-		if (Object.keys(mcpServers).length > 0) {
-			console.log('Sidekick: configuring MCP servers:', Object.keys(mcpServers));
-		}
-
-		// Skills directories
-		const basePath = this.getVaultBasePath();
-		const skillDirs: string[] = [];
-		if (this.skills.length > 0) {
-			skillDirs.push(basePath + '/' + getSkillsFolder(this.plugin.settings));
-		}
-		const disabledSkills = this.skills
-			.filter(s => !this.enabledSkills.has(s.name))
-			.map(s => s.name);
-
-		const permissionHandler = (request: PermissionRequest) => {
-			if (this.plugin.settings.toolApproval === 'allow') {
-				return approveAll(request, {sessionId: ''});
-			}
-			const modal = new ToolApprovalModal(this.app, request);
-			modal.open();
-			return modal.promise;
-		};
-
-		const sessionConfig: SessionConfig = {
-			model,
-			streaming: true,
-			onPermissionRequest: permissionHandler,
-			workingDirectory: this.getWorkingDirectory(),
-			...(Object.keys(mcpServers).length > 0 ? {mcpServers} : {}),
-			...(skillDirs.length > 0 ? {skillDirectories: skillDirs} : {}),
-			...(disabledSkills.length > 0 ? {disabledSkills} : {}),
-			...(systemContent ? {systemMessage: {mode: 'append' as const, content: systemContent}} : {}),
-		};
+		const sessionConfig = this.buildSessionConfig({
+			model: this.selectedModel || undefined,
+			systemContent: agent?.instructions || undefined,
+		});
 
 		this.currentSession = await this.plugin.copilot!.createSession(sessionConfig);
 		this.currentSessionId = this.currentSession.sessionId;
@@ -2579,7 +2758,7 @@ export class SidekickView extends ItemView {
 				this.addInfoMessage(`Error: ${event.data.message}`);
 			}),
 			session.on('tool.execution_start', (event) => {
-				console.log('Sidekick: tool.execution_start', event.data.toolName, event.data);
+				debugLog('Sidekick: tool.execution_start', event.data.toolName, event.data);
 				this.turnToolsUsed.push(event.data.toolName);
 				this.addToolCallBlock(event.data.toolCallId, event.data.toolName, event.data.arguments);
 			}),
@@ -2592,7 +2771,7 @@ export class SidekickView extends ItemView {
 				);
 			}),
 			session.on('skill.invoked', (event) => {
-				console.log('Sidekick: skill.invoked', event.data.name);
+				debugLog('Sidekick: skill.invoked', event.data.name);
 				this.turnSkillsUsed.push(event.data.name);
 			}),
 		);
@@ -2725,6 +2904,162 @@ export class SidekickView extends ItemView {
 		return result.length > 0 ? result : undefined;
 	}
 
+	// ── Shared helpers ───────────────────────────────────────────
+
+	/**
+	 * Resolve a model ID from an agent's preferred model name / partial match.
+	 * Returns the matching model ID, or `fallback` if no match is found.
+	 */
+	private resolveModelForAgent(agent: AgentConfig | undefined, fallback: string | undefined): string | undefined {
+		if (!agent?.model) return fallback;
+		const target = agent.model.toLowerCase();
+		let match = this.models.find(
+			m => m.name.toLowerCase() === target || m.id.toLowerCase() === target
+		);
+		if (!match) {
+			match = this.models.find(
+				m => m.id.toLowerCase().includes(target) || m.name.toLowerCase().includes(target)
+			);
+		}
+		return match ? match.id : fallback;
+	}
+
+	/**
+	 * Build a full SessionConfig from the current UI state.
+	 * Centralises MCP server mapping, skills, permissions, and working directory
+	 * so callers (ensureSession, fireTriggerInBackground) stay DRY.
+	 */
+	private buildSessionConfig(opts: {
+		model?: string;
+		systemContent?: string;
+	}): SessionConfig {
+		// MCP servers
+		const mcpServers: Record<string, MCPServerConfig> = {};
+		for (const server of this.mcpServers) {
+			if (!this.enabledMcpServers.has(server.name)) continue;
+			const cfg = server.config;
+			const serverType = cfg['type'] as string | undefined;
+			const tools = (cfg['tools'] as string[] | undefined) ?? ['*'];
+
+			if (serverType === 'http' || serverType === 'sse') {
+				mcpServers[server.name] = {
+					type: serverType,
+					url: cfg['url'] as string,
+					tools,
+					...(cfg['headers'] ? {headers: cfg['headers'] as Record<string, string>} : {}),
+					...(cfg['timeout'] != null ? {timeout: cfg['timeout'] as number} : {}),
+				} as MCPServerConfig;
+			} else if (cfg['command']) {
+				mcpServers[server.name] = {
+					type: 'local',
+					command: cfg['command'] as string,
+					args: (cfg['args'] as string[] | undefined) ?? [],
+					tools,
+					...(cfg['env'] ? {env: cfg['env'] as Record<string, string>} : {}),
+					...(cfg['cwd'] ? {cwd: cfg['cwd'] as string} : {}),
+					...(cfg['timeout'] != null ? {timeout: cfg['timeout'] as number} : {}),
+				} as MCPServerConfig;
+			}
+		}
+
+		if (Object.keys(mcpServers).length > 0) {
+			debugLog('Sidekick: configuring MCP servers:', Object.keys(mcpServers));
+		}
+
+		// Skills
+		const basePath = this.getVaultBasePath();
+		const skillDirs: string[] = [];
+		if (this.skills.length > 0) {
+			skillDirs.push([basePath, getSkillsFolder(this.plugin.settings)].join('/'));
+		}
+		const disabledSkills = this.skills
+			.filter(s => !this.enabledSkills.has(s.name))
+			.map(s => s.name);
+
+		if (skillDirs.length > 0) {
+			debugLog('Sidekick: skill directories:', skillDirs, 'disabled:', disabledSkills);
+		}
+
+		// Permission handler
+		const permissionHandler = (request: PermissionRequest) => {
+			if (this.plugin.settings.toolApproval === 'allow') {
+				return approveAll(request, {sessionId: ''});
+			}
+			const modal = new ToolApprovalModal(this.app, request);
+			modal.open();
+			return modal.promise;
+		};
+
+		return {
+			model: opts.model,
+			streaming: true,
+			onPermissionRequest: permissionHandler,
+			workingDirectory: this.getWorkingDirectory(),
+			...(Object.keys(mcpServers).length > 0 ? {mcpServers} : {}),
+			...(skillDirs.length > 0 ? {skillDirectories: skillDirs} : {}),
+			...(disabledSkills.length > 0 ? {disabledSkills} : {}),
+			...(opts.systemContent ? {systemMessage: {mode: 'append' as const, content: opts.systemContent}} : {}),
+		};
+	}
+
+	/**
+	 * Return the current skill/MCP/workingDirectory config for external callers
+	 * (e.g. editorMenu inline sessions) so they can pass it to createSession.
+	 */
+	getSessionExtras(): {
+		skillDirectories?: string[];
+		disabledSkills?: string[];
+		mcpServers?: Record<string, MCPServerConfig>;
+		workingDirectory?: string;
+	} {
+		const basePath = this.getVaultBasePath();
+
+		// Skills
+		const skillDirs: string[] = [];
+		if (this.skills.length > 0) {
+			skillDirs.push([basePath, getSkillsFolder(this.plugin.settings)].join('/'));
+		}
+		const disabledSkills = this.skills
+			.filter(s => !this.enabledSkills.has(s.name))
+			.map(s => s.name);
+
+		// MCP servers
+		const mcpServers: Record<string, MCPServerConfig> = {};
+		for (const server of this.mcpServers) {
+			if (!this.enabledMcpServers.has(server.name)) continue;
+			const cfg = server.config;
+			const serverType = cfg['type'] as string | undefined;
+			const tools = (cfg['tools'] as string[] | undefined) ?? ['*'];
+
+			if (serverType === 'http' || serverType === 'sse') {
+				mcpServers[server.name] = {
+					type: serverType,
+					url: cfg['url'] as string,
+					tools,
+					...(cfg['headers'] ? {headers: cfg['headers'] as Record<string, string>} : {}),
+					...(cfg['timeout'] != null ? {timeout: cfg['timeout'] as number} : {}),
+				} as MCPServerConfig;
+			} else if (cfg['command']) {
+				mcpServers[server.name] = {
+					type: 'local',
+					command: cfg['command'] as string,
+					args: (cfg['args'] as string[] | undefined) ?? [],
+					tools,
+					...(cfg['env'] ? {env: cfg['env'] as Record<string, string>} : {}),
+					...(cfg['cwd'] ? {cwd: cfg['cwd'] as string} : {}),
+					...(cfg['timeout'] != null ? {timeout: cfg['timeout'] as number} : {}),
+				} as MCPServerConfig;
+			}
+		}
+
+		return {
+			...(skillDirs.length > 0 ? {skillDirectories: skillDirs} : {}),
+			...(disabledSkills.length > 0 ? {disabledSkills} : {}),
+			...(Object.keys(mcpServers).length > 0 ? {mcpServers} : {}),
+			workingDirectory: this.getWorkingDirectory(),
+		};
+	}
+
 	// ── Utilities ────────────────────────────────────────────────
 
 	private getWorkingDirectory(): string {
@@ -2766,8 +3101,14 @@ export class SidekickView extends ItemView {
 
 	private async renderMarkdownSafe(content: string, container: HTMLElement): Promise<void> {
 		try {
+			// Strip obsidian:// protocol URIs that could trigger vault actions
+			// when rendered as clickable links from AI-generated content.
+			const sanitized = content.replace(
+				/\[([^\]]*)\]\(obsidian:\/\/[^)]*\)/gi,
+				'[$1](blocked-uri)',
+			);
 			const component = this.streamingComponent ?? this;
-			await MarkdownRenderer.render(this.app, content, container, '', component);
+			await MarkdownRenderer.render(this.app, sanitized, container, '', component);
 		} catch {
 			// Fallback to plain text
 			container.setText(content);

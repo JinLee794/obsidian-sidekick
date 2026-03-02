@@ -1,4 +1,5 @@
 import type {TriggerConfig} from './types';
+import {debugLog, debugTrace} from './debug';
 
 /**
  * Minimal 5-field cron expression matcher.
@@ -57,8 +58,12 @@ export function cronMatches(cron: string, date: Date): boolean {
 /**
  * Convert a simple glob pattern to a RegExp.
  * Supports **, *, ?, and literal characters.
+ * Rejects overly long patterns to prevent ReDoS.
  */
 export function globToRegex(glob: string): RegExp {
+	if (glob.length > 500) {
+		throw new Error(`Glob pattern too long (${glob.length} chars, max 500)`);
+	}
 	let regex = '';
 	let i = 0;
 	while (i < glob.length) {
@@ -112,6 +117,8 @@ export class TriggerScheduler {
 	private triggers: TriggerConfig[] = [];
 	private callbacks: TriggerSchedulerCallbacks;
 	private intervalId: number | null = null;
+	/** Cached compiled glob regexes, keyed by glob pattern. Invalidated on setTriggers(). */
+	private globCache = new Map<string, RegExp>();
 
 	constructor(callbacks: TriggerSchedulerCallbacks) {
 		this.callbacks = callbacks;
@@ -119,7 +126,18 @@ export class TriggerScheduler {
 
 	/** Update the list of active triggers (call after config reload). */
 	setTriggers(triggers: TriggerConfig[]): void {
-		this.triggers = triggers;
+		this.triggers = triggers.filter(t => t.enabled);
+		this.globCache.clear();
+	}
+
+	/** Get or compile a glob regex, caching the result. */
+	private getGlobRegex(glob: string): RegExp {
+		let re = this.globCache.get(glob);
+		if (!re) {
+			re = globToRegex(glob);
+			this.globCache.set(glob, re);
+		}
+		return re;
 	}
 
 	/**
@@ -168,26 +186,26 @@ export class TriggerScheduler {
 	checkFileChangeTriggers(filePath: string): void {
 		const now = Date.now();
 		if (this.triggers.length === 0) {
-			console.debug('Sidekick: checkFileChangeTriggers — no triggers loaded');
+			debugTrace('Sidekick: checkFileChangeTriggers — no triggers loaded');
 			return;
 		}
-		console.debug(`Sidekick: checkFileChangeTriggers("${filePath}") — ${this.triggers.length} trigger(s)`);
+		debugTrace(`Sidekick: checkFileChangeTriggers("${filePath}") — ${this.triggers.length} trigger(s)`);
 		for (const trigger of this.triggers) {
 			for (const entry of trigger.triggers) {
 				if (entry.type === 'onFileChange' && entry.glob) {
-					const regex = globToRegex(entry.glob);
+					const regex = this.getGlobRegex(entry.glob);
 					const matches = regex.test(filePath);
-					console.debug(`Sidekick: trigger "${trigger.name}" glob="${entry.glob}" regex=${regex} match=${matches}`);
+					debugTrace(`Sidekick: trigger "${trigger.name}" glob="${entry.glob}" regex=${regex} match=${matches}`);
 					if (matches) {
 						const key = `file:${trigger.name}`;
 						const lastFired = this.callbacks.getLastFired(key);
 						const elapsed = now - lastFired;
 						if (elapsed > 5_000) {
-							console.log(`Sidekick: firing onFileChange trigger "${trigger.name}" for "${filePath}"`);
+							debugLog(`Sidekick: firing onFileChange trigger "${trigger.name}" for "${filePath}"`);
 							this.callbacks.setLastFired(key, now);
 							this.callbacks.onTriggerFire(trigger, {filePath});
 						} else {
-							console.debug(`Sidekick: trigger "${trigger.name}" skipped — cooldown (${Math.round(elapsed / 1000)}s / 5s)`);
+							debugTrace(`Sidekick: trigger "${trigger.name}" skipped — cooldown (${Math.round(elapsed / 1000)}s / 5s)`);
 						}
 						break; // Don't fire same trigger twice for same event
 					}

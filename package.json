@@ -1,6 +1,6 @@
 {
 	"name": "obsidian-sidekick",
-	"version": "1.0.0",
+	"version": "0.4.0",
 	"description": "Your Obsidian sidekick.",
 	"main": "main.js",
 	"type": "module",
@@ -26,6 +26,6 @@
 	},
 	"dependencies": {
 		"@github/copilot-sdk": "^0.1.26",
-		"obsidian": "latest"
+		"obsidian": "~1.10.3"
 	}
 }

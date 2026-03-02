@@ -2,10 +2,11 @@ import {Plugin} from 'obsidian';
 import {DEFAULT_SETTINGS, SidekickSettings, SidekickSettingTab} from "./settings";
 import {CopilotService} from "./copilot";
 import {SidekickView, SIDEKICK_VIEW_TYPE} from "./sidekickView";
-import {registerEditorMenu} from "./editorMenu";
+import {registerEditorMenu, registerFileMenu} from './editorMenu';
+import {buildGhostTextExtension} from "./ghostText";
 
 export default class SidekickPlugin extends Plugin {
-	settings: SidekickSettings;
+	settings!: SidekickSettings;
 	copilot: CopilotService | null = null;
 
 	async onload() {
@@ -27,6 +28,12 @@ export default class SidekickPlugin extends Plugin {
 
 		// Editor context menu (Sidekick submenu for selected text)
 		registerEditorMenu(this);
+
+		// Vault tree context menu (Sidekick submenu for note files)
+		registerFileMenu(this);
+
+		// Ghost-text autocomplete (inline suggestions)
+		this.registerEditorExtension(buildGhostTextExtension(this));
 
 		try {
 			await this.initCopilot();
