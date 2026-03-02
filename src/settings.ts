@@ -1,6 +1,6 @@
 import {App, Notice, PluginSettingTab, Setting, normalizePath} from "obsidian";
 import SidekickPlugin from "./main";
-import type {ModelInfo} from "./copilot";
+import type {ModelInfo, ProviderConfig} from "./copilot";
 
 const DEFAULT_COPILOT_LOCATION = '';
 
@@ -20,6 +20,18 @@ export interface SidekickSettings {
 	inlineModel: string;
 	/** Enable ghost-text autocomplete in the editor. */
 	autocompleteEnabled: boolean;
+	/** Provider preset for BYOK. 'github' uses built-in auth. */
+	providerPreset: 'github' | 'openai' | 'azure' | 'anthropic' | 'ollama' | 'foundry-local' | 'other-openai';
+	/** Base URL for the BYOK provider endpoint. */
+	providerBaseUrl: string;
+	/** API key for the BYOK provider. */
+	providerApiKey: string;
+	/** Bearer token for the BYOK provider. */
+	providerBearerToken: string;
+	/** Wire API format: completions or responses. */
+	providerWireApi: 'completions' | 'responses';
+	/** Model name/ID to use with a BYOK provider. */
+	providerModel: string;
 	/** Custom display names for sessions, keyed by SDK sessionId. */
 	sessionNames?: Record<string, string>;
 	/** Last-fired timestamps for trigger deduplication, keyed by trigger name. */
@@ -36,6 +48,12 @@ export const DEFAULT_SETTINGS: SidekickSettings = {
 	toolApproval: 'ask',
 	inlineModel: '',
 	autocompleteEnabled: false,
+	providerPreset: 'github',
+	providerBaseUrl: '',
+	providerApiKey: '',
+	providerBearerToken: '',
+	providerWireApi: 'completions',
+	providerModel: '',
 }
 
 /** Derive the agents subfolder from the base Sidekick folder. */
@@ -246,6 +264,229 @@ export class SidekickSettingTab extends PluginSettingTab {
 		containerEl.appendChild(clientFieldsEl);
 		renderClientFields();
 
+		// --- Models section ---
+
+		const providerFieldsEl = containerEl.createDiv();
+
+		const providerDefaults: Record<string, {baseUrl?: string; wireApi?: 'completions' | 'responses'}> = {
+			openai:          {baseUrl: 'https://api.openai.com/v1'},
+			azure:           {baseUrl: 'https://your-resource.openai.azure.com/openai/v1/', wireApi: 'responses'},
+			anthropic:       {baseUrl: 'https://api.anthropic.com'},
+			ollama:          {baseUrl: 'http://localhost:11434/v1'},
+			'foundry-local': {baseUrl: 'http://localhost:<PORT>/v1'},
+		};
+
+		const rebuildProviderFields = () => {
+			providerFieldsEl.empty();
+			const preset = this.plugin.settings.providerPreset;
+			const isByok = preset !== 'github';
+
+			if (isByok) {
+				const defaults = providerDefaults[preset];
+				const placeholderUrl = defaults?.baseUrl ?? 'https://api.example.com/v1';
+
+				new Setting(providerFieldsEl)
+					.setName('Base URL')
+					.setDesc('Provider API endpoint (required).')
+					.addText(text => text
+						.setPlaceholder(placeholderUrl)
+						.setValue(this.plugin.settings.providerBaseUrl)
+						.onChange(async (value) => {
+							this.plugin.settings.providerBaseUrl = value.trim();
+							await this.plugin.saveSettings();
+						}));
+
+				new Setting(providerFieldsEl)
+					.setName('Model name')
+					.setDesc('Model ID to use (e.g. gpt-4o, claude-sonnet-4).')
+					.addText(text => text
+						.setPlaceholder('model-id')
+						.setValue(this.plugin.settings.providerModel)
+						.onChange(async (value) => {
+							this.plugin.settings.providerModel = value.trim();
+							await this.plugin.saveSettings();
+							await refreshModels();
+						}));
+
+				new Setting(providerFieldsEl)
+					.setName('API key')
+					.setDesc('Sent as x-api-key header (optional).')
+					.addText(text => {
+						text.inputEl.type = 'password';
+						text.setPlaceholder('sk-…')
+							.setValue(this.plugin.settings.providerApiKey)
+							.onChange(async (value) => {
+								this.plugin.settings.providerApiKey = value.trim();
+								await this.plugin.saveSettings();
+							});
+					});
+
+				new Setting(providerFieldsEl)
+					.setName('Bearer token')
+					.setDesc('Authorization header token (optional).')
+					.addText(text => {
+						text.inputEl.type = 'password';
+						text.setPlaceholder('token')
+							.setValue(this.plugin.settings.providerBearerToken)
+							.onChange(async (value) => {
+								this.plugin.settings.providerBearerToken = value.trim();
+								await this.plugin.saveSettings();
+							});
+					});
+
+				new Setting(providerFieldsEl)
+					.setName('Wire API')
+					.setDesc('API format to use.')
+					.addDropdown(dropdown => dropdown
+						.addOptions({completions: 'Completions', responses: 'Responses'})
+						.setValue(this.plugin.settings.providerWireApi)
+						.onChange(async (value) => {
+							this.plugin.settings.providerWireApi = value as 'completions' | 'responses';
+							await this.plugin.saveSettings();
+						}));
+
+			}
+		};
+
+		const providerOptions: Record<string, string> = {
+			github: 'GitHub (built-in)',
+			openai: 'OpenAI',
+			azure: 'Microsoft Foundry',
+			anthropic: 'Anthropic',
+			ollama: 'Ollama',
+			'foundry-local': 'Microsoft Foundry Local',
+			'other-openai': 'Other OpenAI-compatible',
+		};
+
+		new Setting(containerEl)
+			.setName('Models')
+			.setHeading()
+			.addDropdown(dropdown => dropdown
+				.addOptions(providerOptions)
+				.setValue(this.plugin.settings.providerPreset)
+				.onChange(async (value) => {
+					const newPreset = value as SidekickSettings['providerPreset'];
+					this.plugin.settings.providerPreset = newPreset;
+					// Apply provider-specific defaults
+					const defaults = providerDefaults[newPreset];
+					if (defaults?.baseUrl) {
+						this.plugin.settings.providerBaseUrl = defaults.baseUrl;
+					} else if (newPreset === 'github') {
+						this.plugin.settings.providerBaseUrl = '';
+					}
+					this.plugin.settings.providerWireApi = defaults?.wireApi ?? 'completions';
+					await this.plugin.saveSettings();
+					rebuildProviderFields();
+					await refreshModels();
+				}))
+			.addButton(button => button
+				.setButtonText('Test')
+				.onClick(async () => {
+					button.setDisabled(true);
+					button.setButtonText('Testing…');
+					try {
+						if (!this.plugin.copilot) {
+							throw new Error('Copilot service is not available');
+						}
+						// Attempt to create (and immediately destroy) a session to validate provider config
+						const testSession = await this.plugin.copilot.createSession({
+							onPermissionRequest: async () => ({allow: false, kind: 'denied-interactively-by-user' as const}),
+							...(this.plugin.settings.providerModel ? {model: this.plugin.settings.providerModel} : {}),
+							...(this.plugin.settings.providerPreset !== 'github' && this.plugin.settings.providerBaseUrl
+								? {provider: (() => {
+									const typeMap: Record<string, 'openai' | 'azure' | 'anthropic'> = {
+										openai: 'openai', azure: 'azure', anthropic: 'anthropic',
+										ollama: 'openai', 'foundry-local': 'openai', 'other-openai': 'openai',
+									};
+									const cfg: any = {
+										type: typeMap[this.plugin.settings.providerPreset] ?? 'openai',
+										baseUrl: this.plugin.settings.providerBaseUrl,
+										wireApi: this.plugin.settings.providerWireApi,
+									};
+									if (this.plugin.settings.providerApiKey) cfg.apiKey = this.plugin.settings.providerApiKey;
+									if (this.plugin.settings.providerBearerToken) cfg.bearerToken = this.plugin.settings.providerBearerToken;
+									return cfg;
+								})()}
+								: {}),
+						});
+						await testSession.destroy();
+						new Notice('Provider session created successfully.');
+						await refreshModels();
+					} catch (e) {
+						new Notice(`Test failed: ${String(e)}`);
+					} finally {
+						button.setDisabled(false);
+						button.setButtonText('Test');
+					}
+				}));
+
+		containerEl.appendChild(providerFieldsEl);
+		rebuildProviderFields();
+
+		let inlineModelSelect: HTMLSelectElement | null = null;
+
+		const populateInlineDropdown = (models: ModelInfo[]) => {
+			if (inlineModelSelect) {
+				// Preserve current selection
+				const prev = this.plugin.settings.inlineModel;
+				inlineModelSelect.empty();
+				const defOpt = inlineModelSelect.createEl('option', {text: 'Default (SDK default)'});
+				defOpt.value = '';
+				for (const model of models) {
+					const opt = inlineModelSelect.createEl('option', {text: model.name});
+					opt.value = model.id;
+				}
+				// Restore previous selection if still available, otherwise reset
+				const ids = models.map(m => m.id);
+				inlineModelSelect.value = (prev && ids.includes(prev)) ? prev : '';
+				if (inlineModelSelect.value !== prev) {
+					this.plugin.settings.inlineModel = inlineModelSelect.value;
+					void this.plugin.saveSettings();
+				}
+			}
+		};
+
+		refreshModels = async () => {
+			try {
+				const preset = this.plugin.settings.providerPreset;
+				const isByok = preset !== 'github';
+				if (isByok && this.plugin.settings.providerModel) {
+					// BYOK providers with a model name: use it and auto-select
+					const id = this.plugin.settings.providerModel;
+					this.plugin.settings.inlineModel = id;
+					await this.plugin.saveSettings();
+					populateInlineDropdown([{id, name: id} as ModelInfo]);
+				} else if (isByok) {
+					// BYOK providers without a model name: clear the list
+					populateInlineDropdown([]);
+				} else if (this.plugin.copilot) {
+					const models: ModelInfo[] = await this.plugin.copilot.listModels();
+					populateInlineDropdown(models);
+				}
+			} catch {
+				// silently ignore — dropdown keeps its placeholder
+			}
+		};
+
+		// --- Sidekick settings section ---
+		new Setting(containerEl).setName('Sidekick settings').setHeading();
+
+		new Setting(containerEl)
+			.setName('Inline operations model')
+			.setDesc('Model used for editor context-menu actions (fix grammar, summarize, etc.).')
+			.addDropdown(dropdown => {
+				inlineModelSelect = dropdown.selectEl;
+				dropdown.addOption('', 'Default (SDK default)');
+				if (this.plugin.settings.inlineModel) {
+					dropdown.addOption(this.plugin.settings.inlineModel, this.plugin.settings.inlineModel);
+					dropdown.setValue(this.plugin.settings.inlineModel);
+				}
+				dropdown.onChange(async (value) => {
+					this.plugin.settings.inlineModel = value;
+					await this.plugin.saveSettings();
+				});
+			});
+
 		new Setting(containerEl)
 			.setName('Sidekick folder')
 			.setDesc('Vault folder for agents, skills, tools and triggers.')
@@ -330,56 +571,6 @@ export class SidekickSettingTab extends PluginSettingTab {
 					this.plugin.settings.toolApproval = value as 'ask' | 'allow';
 					await this.plugin.saveSettings();
 				}));
-
-		// --- Models section ---
-		new Setting(containerEl).setName('Models').setHeading();
-
-		let inlineModelSelect: HTMLSelectElement | null = null;
-
-		const populateInlineDropdown = (models: ModelInfo[]) => {
-			if (inlineModelSelect) {
-				inlineModelSelect.empty();
-				inlineModelSelect.createEl('option', {text: 'Default (SDK default)', value: ''});
-				for (const model of models) {
-					inlineModelSelect.createEl('option', {
-						text: model.name,
-						value: model.id,
-					});
-				}
-				if (this.plugin.settings.inlineModel) {
-					inlineModelSelect.value = this.plugin.settings.inlineModel;
-				}
-			}
-		};
-
-		refreshModels = async () => {
-			try {
-				if (!this.plugin.copilot) return;
-				const models: ModelInfo[] = await this.plugin.copilot.listModels();
-				populateInlineDropdown(models);
-			} catch {
-				// silently ignore — dropdown keeps its placeholder
-			}
-		};
-
-		new Setting(containerEl)
-			.setName('Inline operations model')
-			.setDesc('Model used for editor context-menu actions (fix grammar, summarize, etc.).')
-			.addDropdown(dropdown => {
-				inlineModelSelect = dropdown.selectEl;
-				dropdown.addOption('', 'Default (SDK default)');
-				if (this.plugin.settings.inlineModel) {
-					dropdown.addOption(this.plugin.settings.inlineModel, this.plugin.settings.inlineModel);
-					dropdown.setValue(this.plugin.settings.inlineModel);
-				}
-				dropdown.onChange(async (value) => {
-					this.plugin.settings.inlineModel = value;
-					await this.plugin.saveSettings();
-				});
-			});
-
-		// --- Autocomplete section ---
-		new Setting(containerEl).setName('Autocomplete').setHeading();
 
 		new Setting(containerEl)
 			.setName('Enable ghost-text autocomplete')

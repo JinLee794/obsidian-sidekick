@@ -2,17 +2,57 @@
 
 Your AI-powered second brain inside Obsidian. Chat with agents, run tools, fire triggers, and transform text — all without leaving your vault.
 
-Sidekick connects to GitHub Copilot to give you a fully configurable AI assistant panel with agents, skills, MCP tool servers, prompt templates, triggers, and an editor context menu.
+Sidekick connects to GitHub Copilot — or your own AI provider — to give you a fully configurable AI assistant panel with agents, skills, MCP tool servers, prompt templates, triggers, and an editor context menu.
 
-> **Desktop only.** Requires a GitHub Copilot subscription and the Copilot CLI.
+> **Desktop only.** Requires either a GitHub Copilot subscription with the Copilot CLI, or a BYOK (Bring Your Own Key) provider such as OpenAI, Anthropic, Ollama, or any OpenAI-compatible endpoint.
 
 ---
 
 ## Getting started
 
-### 1. Check the GitHub Copilot CLI
+### 1. Choose your provider
 
-Sidekick requires the GitHub Copilot CLI. If you have [GitHub Copilot in VS Code](https://marketplace.visualstudio.com/items?itemName=GitHub.copilot), the CLI is already installed — you just need to find its path.
+Sidekick supports two modes:
+
+- **GitHub (built-in)** — Uses the GitHub Copilot CLI and your Copilot subscription. See [Setting up the Copilot CLI](#setting-up-the-copilot-cli) below.
+- **BYOK (Bring Your Own Key)** — Connect to OpenAI, Microsoft Foundry, Anthropic, Ollama, Microsoft Foundry Local, or any OpenAI-compatible endpoint. See [BYOK providers](#byok-providers) below.
+
+### 2. Install the plugin
+
+Download `main.js`, `styles.css`, and `manifest.json` from the [latest release](https://github.com/vieiraae/obsidian-sidekick/releases/latest) and place them in your vault:
+
+```
+<YourVault>/.obsidian/plugins/sidekick/
+```
+
+Reload Obsidian. Enable **Sidekick** in **Settings → Community plugins**.
+
+### 3. Configure
+
+Open **Settings → Sidekick** and configure your provider (see sections below). Click **Test** to verify the connection.
+
+### 4. Initialize the Sidekick folder
+
+In the same settings tab, under **Sidekick settings**, set a **Sidekick folder** name (default: `sidekick`) and click **Initialize**. This creates the folder structure with sample files:
+
+```
+sidekick/
+  agents/        → Agent definitions (*.agent.md)
+  skills/        → Skill definitions (subfolder with SKILL.md)
+  tools/         → MCP server config (mcp.json)
+  prompts/       → Prompt templates (*.prompt.md)
+  triggers/      → Automated triggers (*.trigger.md)
+```
+
+### 5. Open Sidekick
+
+Click the **brain** icon in the ribbon, or run the **Open Sidekick** command from the command palette.
+
+---
+
+## Setting up the Copilot CLI
+
+If you're using the **GitHub (built-in)** provider, Sidekick requires the GitHub Copilot CLI. If you have [GitHub Copilot in VS Code](https://marketplace.visualstudio.com/items?itemName=GitHub.copilot), the CLI is already installed — you just need to find its path.
 
 **Verify it's working** by running in a terminal:
 
@@ -42,36 +82,48 @@ Follow the browser-based authentication flow. Once logged in, confirm with:
 copilot auth status
 ```
 
-### 2. Install the plugin
+In **Settings → Sidekick → GitHub Copilot Client**, choose **Local CLI** or **Remote CLI**:
 
-Download `main.js`, `styles.css`, and `manifest.json` from the [latest release](https://github.com/vieiraae/obsidian-sidekick/releases/latest) and place them in your vault:
+- **Local CLI** — Set the **Path** to the full path of your `copilot` binary (leave blank if it's on your `PATH`). Toggle **Use Logged-in User** or supply a **GitHub Token**.
+- **Remote CLI** — Enter the **URL** of an existing CLI server and a **GitHub Token**.
 
-```
-<YourVault>/.obsidian/plugins/sidekick/
-```
+Click **Test** to verify the connection.
 
-Reload Obsidian. Enable **Sidekick** in **Settings → Community plugins**.
+---
 
-### 3. Configure the Copilot CLI
+## BYOK providers
 
-Open **Settings → Sidekick** and set the **Copilot location** to the full path of your `copilot` binary found in step 1 (leave blank if it's on your `PATH`). Click **Ping** to verify the connection.
+Sidekick supports Bring Your Own Key (BYOK) providers for users who want to use their own API keys instead of (or alongside) GitHub Copilot.
 
-### 4. Initialize the Sidekick folder
+Open **Settings → Sidekick → Models** and select a provider from the dropdown:
 
-In the same settings tab, set a **Sidekick folder** name (default: `sidekick`) and click **Initialize**. This creates the folder structure with sample files:
+| Provider | Type | Description |
+|----------|------|-------------|
+| **GitHub (built-in)** | — | Uses GitHub Copilot via the CLI (default) |
+| **OpenAI** | `openai` | OpenAI API (`https://api.openai.com/v1`) |
+| **Microsoft Foundry** | `azure` | Azure OpenAI / Microsoft Foundry endpoint |
+| **Anthropic** | `anthropic` | Anthropic API (`https://api.anthropic.com`) |
+| **Ollama** | `openai` | Local Ollama server (`http://localhost:11434/v1`) |
+| **Microsoft Foundry Local** | `openai` | Local Foundry model server |
+| **Other OpenAI-compatible** | `openai` | Any OpenAI-compatible endpoint |
 
-```
-sidekick/
-  agents/        → Agent definitions (*.agent.md)
-  skills/        → Skill definitions (subfolder with SKILL.md)
-  tools/         → MCP server config (mcp.json)
-  prompts/       → Prompt templates (*.prompt.md)
-  triggers/      → Automated triggers (*.trigger.md)
-```
+### BYOK settings
 
-### 5. Open Sidekick
+When a non-GitHub provider is selected, additional fields appear:
 
-Click the **brain** icon in the ribbon, or run the **Open Sidekick** command from the command palette.
+| Field | Description |
+|-------|-------------|
+| **Base URL** | API endpoint URL (pre-filled with provider defaults) |
+| **Model name** | Model ID to use (e.g. `gpt-4o`, `claude-sonnet-4`, `llama3.2`) |
+| **API key** | Sent as `x-api-key` header (optional) |
+| **Bearer token** | `Authorization` header token (optional) |
+| **Wire API** | API format — `Completions` or `Responses` |
+
+Click **Test** next to the Models heading to validate your provider configuration.
+
+The configured model name automatically appears in both the **Inline operations model** dropdown and the **chat view model** dropdown.
+
+> **Note:** Streaming is automatically disabled for the **Microsoft Foundry Local** provider.
 
 ---
 
@@ -288,7 +340,15 @@ Select text in any note, right-click, and choose **Sidekick** to access quick ac
 | **Explain** | Explains in simple, clear terms |
 | **Rewrite** | Improves clarity and readability |
 
-The result **replaces the selected text** in-place.
+The result **replaces the selected text** in-place. These actions use the **Inline operations model** configured in settings.
+
+---
+
+## Ghost-text autocomplete
+
+Enable **ghost-text autocomplete** in **Settings → Sidekick → Sidekick settings** to get inline AI suggestions as you type in any note. Suggestions appear as dimmed text ahead of your cursor — **double-click** to accept.
+
+Autocomplete uses the **Inline operations model** setting. Works with both GitHub Copilot and BYOK providers.
 
 ---
 
@@ -310,13 +370,35 @@ Sessions are automatically named using the pattern `<Agent>: <first message>`. T
 
 Open **Settings → Sidekick** to configure:
 
+### GitHub Copilot Client
+
 | Setting | Default | Description |
 |---------|---------|-------------|
-| **Copilot location** | *(empty)* | Path to the Copilot CLI binary. Leave blank if on `PATH`. |
-| **Sidekick folder** | `sidekick` | Vault folder containing agents, skills, tools, prompts, and triggers. |
-| **Tools approval** | Allow | Whether tool invocations require manual approval. |
+| **Type** | Local CLI | `Local CLI` (spawns the binary) or `Remote CLI` (connects to a running server) |
+| **Path** | *(empty)* | Path to the Copilot CLI binary. Leave blank if on `PATH`. (Local mode only) |
+| **URL** | *(empty)* | URL of an existing CLI server (Remote mode only) |
+| **Use Logged-in User** | On | Use the OS-level GitHub login for auth (Local mode only) |
+| **GitHub Token** | *(empty)* | Personal access token (`ghp_…`) for manual auth |
 
-Click **List** under the **Models** section to fetch and display all available models from the Copilot service.
+### Models
+
+| Setting | Default | Description |
+|---------|---------|-------------|
+| **Provider** | GitHub (built-in) | AI provider — GitHub, OpenAI, Microsoft Foundry, Anthropic, Ollama, Foundry Local, or Other |
+| **Base URL** | *(per provider)* | API endpoint for BYOK providers |
+| **Model name** | *(empty)* | Model ID for BYOK providers (e.g. `gpt-4o`, `claude-sonnet-4`) |
+| **API key** | *(empty)* | `x-api-key` header value |
+| **Bearer token** | *(empty)* | `Authorization` header token |
+| **Wire API** | Completions | API format: `Completions` or `Responses` |
+
+### Sidekick settings
+
+| Setting | Default | Description |
+|---------|---------|-------------|
+| **Inline operations model** | Default (SDK default) | Model used for editor context-menu actions and ghost-text autocomplete |
+| **Sidekick folder** | `sidekick` | Vault folder containing agents, skills, tools, prompts, and triggers |
+| **Tools approval** | Ask | Whether tool invocations require manual approval |
+| **Enable ghost-text autocomplete** | Off | Show inline AI suggestions as you type in the editor |
 
 ---
 

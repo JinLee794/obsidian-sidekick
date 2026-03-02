@@ -21,6 +21,7 @@ import type {
 	PermissionRequestResult,
 	PermissionHandler,
 } from '@github/copilot-sdk';
+import type {ProviderConfig} from '@github/copilot-sdk/dist/types';
 
 // Available at runtime in the esbuild CJS bundle.
 declare const __dirname: string;
@@ -324,4 +325,5 @@ export type {
 	PermissionRequestResult,
 	PermissionHandler,
 	SessionListFilter,
+	ProviderConfig,
 };

@@ -23,6 +23,7 @@ import type {
 	MessageOptions,
 	PermissionRequest,
 	PermissionRequestResult,
+	ProviderConfig,
 } from './copilot';
 import type {AgentConfig, SkillInfo, McpServerEntry, PromptConfig, TriggerConfig, ChatMessage, ChatAttachment} from './types';
 import {loadAgents, loadSkills, loadMcpServers, loadPrompts, loadTriggers} from './configLoader';
@@ -658,12 +659,21 @@ export class SidekickView extends ItemView {
 			this.enabledSkills = new Set(this.skills.map(s => s.name));
 			this.enabledMcpServers = new Set(this.mcpServers.map(s => s.name));
 
-			// Skip model fetch during silent (auto-refresh) reloads
-			if (!options?.silent && this.plugin.copilot) {
-				try {
-					this.models = await this.plugin.copilot.listModels();
-				} catch (e) {
-					console.warn('Sidekick: failed to load models', e);
+			// Populate model list: BYOK direct providers don't need a copilot connection
+			if (!options?.silent) {
+				const preset = this.plugin.settings.providerPreset;
+				const isByok = preset !== 'github';
+				if (isByok && this.plugin.settings.providerModel) {
+					const id = this.plugin.settings.providerModel;
+					this.models = [{id, name: id} as ModelInfo];
+				} else if (isByok) {
+					// BYOK providers without a model name: keep existing list
+				} else if (this.plugin.copilot) {
+					try {
+						this.models = await this.plugin.copilot.listModels();
+					} catch (e) {
+						console.warn('Sidekick: failed to load models', e);
+					}
 				}
 			}
 		} catch (e) {
@@ -2990,11 +3000,33 @@ export class SidekickView extends ItemView {
 			return modal.promise;
 		};
 
+		// Build BYOK provider config if a non-GitHub preset is selected
+		const providerPreset = this.plugin.settings.providerPreset;
+		let provider: ProviderConfig | undefined;
+		if (providerPreset !== 'github' && this.plugin.settings.providerBaseUrl) {
+			const typeMap: Record<string, 'openai' | 'azure' | 'anthropic'> = {
+				openai: 'openai',
+				azure: 'azure',
+				anthropic: 'anthropic',
+				ollama: 'openai',
+				'foundry-local': 'openai',
+				'other-openai': 'openai',
+			};
+			provider = {
+				type: typeMap[providerPreset] ?? 'openai',
+				baseUrl: this.plugin.settings.providerBaseUrl,
+				...(this.plugin.settings.providerApiKey ? {apiKey: this.plugin.settings.providerApiKey} : {}),
+				...(this.plugin.settings.providerBearerToken ? {bearerToken: this.plugin.settings.providerBearerToken} : {}),
+				wireApi: this.plugin.settings.providerWireApi,
+			};
+		}
+
 		return {
-			model: opts.model,
-			streaming: true,
+			model: (provider && this.plugin.settings.providerModel) ? this.plugin.settings.providerModel : opts.model,
+			streaming: providerPreset !== 'foundry-local',
 			onPermissionRequest: permissionHandler,
 			workingDirectory: this.getWorkingDirectory(),
+			...(provider ? {provider} : {}),
 			...(Object.keys(mcpServers).length > 0 ? {mcpServers} : {}),
 			...(skillDirs.length > 0 ? {skillDirectories: skillDirs} : {}),
 			...(disabledSkills.length > 0 ? {disabledSkills} : {}),
