@@ -167,7 +167,7 @@ class SidekickGutterMarker extends GutterMarker {
 		return btn;
 	}
 
-	// eslint-disable-next-line @typescript-eslint/no-unused-vars
+	// eslint-disable-next-line @typescript-eslint/no-unused-vars -- Parameter required by GutterMarker.eq() override signature
 	eq(_other: SidekickGutterMarker): boolean {
 		// Always re-render so the loading state stays fresh
 		return false;

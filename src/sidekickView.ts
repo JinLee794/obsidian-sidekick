@@ -2158,7 +2158,7 @@ export class SidekickView extends ItemView {
 						try {
 							const filePath = att.path!;
 							// Reject paths with traversal sequences
-							if (/\.\.[\/\\]/.test(filePath)) {
+							if (/\.\.[/\\]/.test(filePath)) {
 								new Notice('Cannot open file: path contains directory traversal.');
 								return;
 							}
