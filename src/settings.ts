@@ -469,7 +469,7 @@ export class SidekickSettingTab extends PluginSettingTab {
 		};
 
 		// --- Sidekick settings section ---
-		new Setting(containerEl).setName('Sidekick').setHeading();
+		new Setting(containerEl).setName('Capabilities').setHeading();
 
 		new Setting(containerEl)
 			.setName('Inline operations model')
@@ -556,7 +556,7 @@ export class SidekickSettingTab extends PluginSettingTab {
 
 						new Notice('Sidekick folder initialized with sample agent, skill, prompt, trigger, and mcp.json.');
 					} catch (e) {
-						new Notice(`Failed to initialize Sidekick folder: ${String(e)}`);
+						new Notice(`Failed to initialize sidekick folder: ${String(e)}`);
 					}
 				}));
 

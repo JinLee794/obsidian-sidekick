@@ -167,7 +167,6 @@ class SidekickGutterMarker extends GutterMarker {
 		return btn;
 	}
 
-	// eslint-disable-next-line @typescript-eslint/no-unused-vars -- Parameter required by GutterMarker.eq() override signature
 	eq(_other: SidekickGutterMarker): boolean {
 		// Always re-render so the loading state stays fresh
 		return false;
@@ -346,7 +345,7 @@ export function buildGhostTextExtension(plugin: SidekickPlugin): Extension {
 		}
 
 		const sel = view.state.selection.main;
-		if (!sel.empty) { new Notice('Sidekick: Place cursor without selection.'); return; }
+		if (!sel.empty) { new Notice('Sidekick: place cursor without selection.'); return; }
 
 		const version = view.state.doc.length;
 		void fetchCompletion(view, version);

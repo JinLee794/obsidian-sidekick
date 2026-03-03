@@ -135,7 +135,7 @@ export function registerFileMenu(plugin: SidekickPlugin): void {
 				submenu.addSeparator();
 
 				submenu.addItem((si) =>
-					si.setTitle('Chat with Sidekick')
+					si.setTitle('Chat with sidekick')
 						.setIcon('brain')
 						.onClick(async () => {
 							const leaf = plugin.app.workspace.getLeaf();
@@ -159,7 +159,7 @@ export function registerFileMenu(plugin: SidekickPlugin): void {
 							.onClick(async () => {
 								plugin.settings.autocompleteEnabled = !autoEnabled;
 								await plugin.saveData(plugin.settings);
-								new Notice(`Sidekick: Autocomplete ${plugin.settings.autocompleteEnabled ? 'enabled' : 'disabled'}.`);
+								new Notice(`Sidekick: autocomplete ${plugin.settings.autocompleteEnabled ? 'enabled' : 'disabled'}.`);
 							}),
 					);
 				});
@@ -229,7 +229,7 @@ function showNewNoteModal(plugin: SidekickPlugin, folder: TFolder): void {
 
 	const tc = new TextComponent(modal.contentEl);
 	tc.inputEl.classList.add('sidekick-modal-text-input');
-	tc.setPlaceholder('e.g. Daily notes, Meeting notes, Project brief');
+	tc.setPlaceholder('e.g. daily notes, meeting notes, project brief');
 
 	const btnRow = modal.contentEl.createDiv({cls: 'modal-button-container'});
 	const goBtn = btnRow.createEl('button', {text: 'Create', cls: 'mod-cta'});
@@ -254,7 +254,7 @@ async function createNewNote(plugin: SidekickPlugin, folder: TFolder, templateTy
 		? `The note should follow a "${templateType}" template. `
 		: '';
 
-	const notice = new Notice('Sidekick: Creating note…', 0);
+	const notice = new Notice('Sidekick: creating note…', 0);
 	try {
 		// Ask the LLM for a suggested filename and structured content
 		const {content: result, sessionId} = await plugin.copilot.inlineChat({
@@ -272,7 +272,7 @@ async function createNewNote(plugin: SidekickPlugin, folder: TFolder, templateTy
 		});
 		registerInlineSession(plugin, sessionId, `New note in ${folder.name}`);
 
-		if (!result) { notice.hide(); new Notice('Sidekick: No response.'); return; }
+		if (!result) { notice.hide(); new Notice('Sidekick: no response.'); return; }
 
 		// Parse title and content
 		let title = 'New note';
@@ -294,14 +294,14 @@ async function createNewNote(plugin: SidekickPlugin, folder: TFolder, templateTy
 
 		const newFile = await plugin.app.vault.create(filePath, content);
 		notice.hide();
-		new Notice(`Sidekick: Created "${basename}".`);
+		new Notice(`Sidekick: created "${basename}".`);
 
 		// Open the new note
 		const leaf = plugin.app.workspace.getLeaf();
 		await leaf.openFile(newFile);
 	} catch (e) {
 		notice.hide();
-		new Notice(`Sidekick: Error — ${String(e)}`);
+		new Notice(`Sidekick: error — ${String(e)}`);
 	}
 }
 
@@ -314,11 +314,11 @@ async function createSummaryNote(plugin: SidekickPlugin, folder: TFolder): Promi
 		.sort((a, b) => a.basename.localeCompare(b.basename));
 
 	if (mdFiles.length === 0) {
-		new Notice('Sidekick: No notes found in this folder.');
+		new Notice('Sidekick: no notes found in this folder.');
 		return;
 	}
 
-	const notice = new Notice('Sidekick: Creating summary…', 0);
+	const notice = new Notice('Sidekick: creating summary…', 0);
 	try {
 		// Read all notes (truncate each to keep within context limits)
 		const MAX_PER_NOTE = 2000;
@@ -343,20 +343,20 @@ async function createSummaryNote(plugin: SidekickPlugin, folder: TFolder): Promi
 		});
 		registerInlineSession(plugin, sessionId, `Summary of ${folder.name}`);
 
-		if (!result) { notice.hide(); new Notice('Sidekick: No response.'); return; }
+		if (!result) { notice.hide(); new Notice('Sidekick: no response.'); return; }
 
 		const basename = uniqueNoteName(folder, `${folder.name} — Summary`);
 		const filePath = normalizePath(`${folder.path}/${basename}.md`);
 
 		const newFile = await plugin.app.vault.create(filePath, result.trim());
 		notice.hide();
-		new Notice(`Sidekick: Created "${basename}".`);
+		new Notice(`Sidekick: created "${basename}".`);
 
 		const leaf = plugin.app.workspace.getLeaf();
 		await leaf.openFile(newFile);
 	} catch (e) {
 		notice.hide();
-		new Notice(`Sidekick: Error — ${String(e)}`);
+		new Notice(`Sidekick: error — ${String(e)}`);
 	}
 }
 
@@ -371,7 +371,7 @@ export async function runSelectionAction(
 	action: TextAction,
 ): Promise<void> {
 	if (!plugin.copilot) {
-		new Notice('Copilot is not configured. Go to Settings → Sidekick.');
+		new Notice('Copilot is not configured.');
 		return;
 	}
 
@@ -383,7 +383,7 @@ export async function runSelectionAction(
 
 		if (!result) {
 			notice.hide();
-			new Notice('Sidekick: No response received.');
+			new Notice('Sidekick: no response received.');
 			return;
 		}
 
@@ -397,7 +397,7 @@ export async function runSelectionAction(
 	} catch (e) {
 		notice.hide();
 		console.error('Sidekick: editor action error', e);
-		new Notice(`Sidekick: Error — ${String(e)}`);
+		new Notice(`Sidekick: error — ${String(e)}`);
 	} finally {
 		try { view.dispatch({effects: setFetching.of(false)}); } catch { /* view destroyed */ }
 	}
@@ -541,7 +541,7 @@ function escapeRegex(s: string): string {
 async function extractAndInsertBelow(plugin: SidekickPlugin, file: TFile): Promise<void> {
 	const activeView = plugin.app.workspace.getActiveViewOfType(MarkdownView);
 	if (!activeView) {
-		new Notice('Sidekick: Open a note that contains this image first.');
+		new Notice('Sidekick: open a note that contains this image first.');
 		return;
 	}
 	const cmView: EditorView | undefined = (activeView as unknown as {editor?: {cm?: EditorView}}).editor?.cm;
@@ -549,14 +549,14 @@ async function extractAndInsertBelow(plugin: SidekickPlugin, file: TFile): Promi
 
 	const embed = findImageEmbed(cmView, file);
 	if (!embed) {
-		new Notice(`Sidekick: Could not find a reference to "${file.name}" in the active note.`);
+		new Notice(`Sidekick: could not find a reference to "${file.name}" in the active note.`);
 		return;
 	}
 
-	const notice = new Notice('Sidekick: Extracting image content…', 0);
+	const notice = new Notice('Sidekick: extracting image content…', 0);
 	try {
 		const content = await extractImageContent(plugin, file);
-		if (!content) { notice.hide(); new Notice('Sidekick: No content extracted.'); return; }
+		if (!content) { notice.hide(); new Notice('Sidekick: no content extracted.'); return; }
 
 		// Insert after the embed line
 		const line = cmView.state.doc.lineAt(embed.to);
@@ -565,10 +565,10 @@ async function extractAndInsertBelow(plugin: SidekickPlugin, file: TFile): Promi
 			changes: {from: insertPos, insert: '\n\n' + content},
 		});
 		notice.hide();
-		new Notice('Sidekick: Extracted content inserted.');
+		new Notice('Sidekick: extracted content inserted.');
 	} catch (e) {
 		notice.hide();
-		new Notice(`Sidekick: Error — ${String(e)}`);
+		new Notice(`Sidekick: error — ${String(e)}`);
 	}
 }
 
@@ -576,7 +576,7 @@ async function extractAndInsertBelow(plugin: SidekickPlugin, file: TFile): Promi
 async function extractAndReplace(plugin: SidekickPlugin, file: TFile): Promise<void> {
 	const activeView = plugin.app.workspace.getActiveViewOfType(MarkdownView);
 	if (!activeView) {
-		new Notice('Sidekick: Open a note that contains this image first.');
+		new Notice('Sidekick: open a note that contains this image first.');
 		return;
 	}
 	const cmView: EditorView | undefined = (activeView as unknown as {editor?: {cm?: EditorView}}).editor?.cm;
@@ -584,23 +584,23 @@ async function extractAndReplace(plugin: SidekickPlugin, file: TFile): Promise<v
 
 	const embed = findImageEmbed(cmView, file);
 	if (!embed) {
-		new Notice(`Sidekick: Could not find a reference to "${file.name}" in the active note.`);
+		new Notice(`Sidekick: could not find a reference to "${file.name}" in the active note.`);
 		return;
 	}
 
-	const notice = new Notice('Sidekick: Extracting image content…', 0);
+	const notice = new Notice('Sidekick: extracting image content…', 0);
 	try {
 		const content = await extractImageContent(plugin, file);
-		if (!content) { notice.hide(); new Notice('Sidekick: No content extracted.'); return; }
+		if (!content) { notice.hide(); new Notice('Sidekick: no content extracted.'); return; }
 
 		cmView.dispatch({
 			changes: {from: embed.from, to: embed.to, insert: content},
 		});
 		notice.hide();
-		new Notice('Sidekick: Image replaced with extracted content.');
+		new Notice('Sidekick: image replaced with extracted content.');
 	} catch (e) {
 		notice.hide();
-		new Notice(`Sidekick: Error — ${String(e)}`);
+		new Notice(`Sidekick: error — ${String(e)}`);
 	}
 }
 
@@ -641,7 +641,7 @@ export function showEditNoteModal(plugin: SidekickPlugin, view: EditorView): voi
 async function applyEditNote(plugin: SidekickPlugin, view: EditorView, userPrompt: string): Promise<void> {
 	if (!plugin.copilot) { new Notice('Copilot is not configured.'); return; }
 	const doc = view.state.doc.toString();
-	const notice = new Notice('Sidekick: Editing note…', 0);
+	const notice = new Notice('Sidekick: editing note…', 0);
 	view.dispatch({effects: setFetching.of(true)});
 	try {
 		const {content: result, sessionId} = await plugin.copilot.inlineChat({
@@ -654,13 +654,13 @@ async function applyEditNote(plugin: SidekickPlugin, view: EditorView, userPromp
 				'Do not include explanations, markdown code fences, or introductory text. Return the full note.',
 		});
 		registerInlineSession(plugin, sessionId, `Edit: ${userPrompt.slice(0, 30)}`);
-		if (!result) { notice.hide(); new Notice('Sidekick: No response.'); return; }
+		if (!result) { notice.hide(); new Notice('Sidekick: no response.'); return; }
 		view.dispatch({changes: {from: 0, to: view.state.doc.length, insert: result.trim()}});
 		notice.hide();
-		new Notice('Sidekick: Note edited.');
+		new Notice('Sidekick: note edited.');
 	} catch (e) {
 		notice.hide();
-		new Notice(`Sidekick: Error — ${String(e)}`);
+		new Notice(`Sidekick: error — ${String(e)}`);
 	} finally {
 		try { view.dispatch({effects: setFetching.of(false)}); } catch { /* view destroyed */ }
 	}
@@ -680,7 +680,7 @@ export function showStructureModal(plugin: SidekickPlugin, view: EditorView): vo
 
 	const tc = new TextComponent(modal.contentEl);
 	tc.inputEl.classList.add('sidekick-modal-text-input');
-	tc.setPlaceholder('e.g. Daily notes, Meeting notes, Project brief');
+	tc.setPlaceholder('e.g. daily notes, meeting notes, project brief');
 
 	const btnRow = modal.contentEl.createDiv({cls: 'modal-button-container'});
 	const goBtn = btnRow.createEl('button', {text: 'Structure', cls: 'mod-cta'});
@@ -719,13 +719,13 @@ async function applyStructure(plugin: SidekickPlugin, view: EditorView, template
 				'Do not include explanations, markdown code fences, or introductory text. Return the full note.',
 		});
 		registerInlineSession(plugin, sessionId, 'Structure and refine');
-		if (!result) { notice.hide(); new Notice('Sidekick: No response.'); return; }
+		if (!result) { notice.hide(); new Notice('Sidekick: no response.'); return; }
 		view.dispatch({changes: {from: 0, to: view.state.doc.length, insert: result.trim()}});
 		notice.hide();
-		new Notice('Sidekick: Note structured.');
+		new Notice('Sidekick: note structured.');
 	} catch (e) {
 		notice.hide();
-		new Notice(`Sidekick: Error — ${String(e)}`);
+		new Notice(`Sidekick: error — ${String(e)}`);
 	} finally {
 		try { view.dispatch({effects: setFetching.of(false)}); } catch { /* view destroyed */ }
 	}
@@ -818,7 +818,7 @@ export function buildSidekickMenu(menu: Menu, plugin: SidekickPlugin, view: Edit
 				.onClick(async () => {
 					plugin.settings.autocompleteEnabled = !autoEnabled;
 					await plugin.saveData(plugin.settings);
-					new Notice(`Sidekick: Autocomplete ${plugin.settings.autocompleteEnabled ? 'enabled' : 'disabled'}.`);
+					new Notice(`Sidekick: autocomplete ${plugin.settings.autocompleteEnabled ? 'enabled' : 'disabled'}.`);
 				}),
 		);
 		sub.addItem((si) =>

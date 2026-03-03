@@ -477,8 +477,8 @@ export class SidekickView extends ItemView {
 
 		// Auto-resize
 		this.inputEl.addEventListener('input', () => {
-			this.inputEl.style.height = 'auto';
-			this.inputEl.style.height = Math.min(this.inputEl.scrollHeight, 200) + 'px';
+			this.inputEl.setCssProps({'--input-height': 'auto'});
+			this.inputEl.setCssProps({'--input-height': Math.min(this.inputEl.scrollHeight, 200) + 'px'});
 			this.handlePromptTrigger();
 		});
 
@@ -990,7 +990,7 @@ export class SidekickView extends ItemView {
 			// Resolve absolute OS path: prefer Electron webUtils, fallback to File.path
 			let getPath: (f: File) => string;
 			try {
-				const {webUtils} = (globalThis.require as NodeRequire)('electron') as {webUtils?: {getPathForFile: (f: File) => string}};
+				const {webUtils} = (globalThis.require as NodeJS.Require)('electron') as {webUtils?: {getPathForFile: (f: File) => string}};
 				if (webUtils?.getPathForFile) {
 					getPath = (f: File) => webUtils.getPathForFile(f);
 				} else {
@@ -1169,8 +1169,8 @@ export class SidekickView extends ItemView {
 
 		// Replace input with /prompt-name + space
 		this.inputEl.value = `/${selected.name} `;
-		this.inputEl.style.height = 'auto';
-		this.inputEl.style.height = Math.min(this.inputEl.scrollHeight, 200) + 'px';
+		this.inputEl.setCssProps({'--input-height': 'auto'});
+		this.inputEl.setCssProps({'--input-height': Math.min(this.inputEl.scrollHeight, 200) + 'px'});
 		this.inputEl.focus();
 		this.closePromptDropdown();
 	}
@@ -1179,7 +1179,7 @@ export class SidekickView extends ItemView {
 
 	private buildSessionSidebar(parent: HTMLElement): void {
 		this.sidebarEl = parent.createDiv({cls: 'sidekick-sidebar'});
-		this.sidebarEl.style.width = `${this.sidebarWidth}px`;
+		this.sidebarEl.setCssProps({'--sidebar-width': `${this.sidebarWidth}px`});
 
 		// Header: new session button + filter + sort + search
 		const header = this.sidebarEl.createDiv({cls: 'sidekick-sidebar-header'});
@@ -1241,7 +1241,7 @@ export class SidekickView extends ItemView {
 			const dx = startX - e.clientX;
 			const newWidth = Math.max(40, Math.min(300, startWidth + dx));
 			this.sidebarWidth = newWidth;
-			this.sidebarEl.style.width = `${newWidth}px`;
+			this.sidebarEl.setCssProps({'--sidebar-width': `${newWidth}px`});
 		};
 
 		const onMouseUp = () => {
@@ -1919,7 +1919,7 @@ export class SidekickView extends ItemView {
 		if (this.currentSessionId === sessionId) {
 			this.currentSessionId = null;
 			this.currentSession = null;
-			await this.newConversation();
+			this.newConversation();
 		}
 
 		this.renderSessionList();
@@ -2162,7 +2162,7 @@ export class SidekickView extends ItemView {
 								new Notice('Cannot open file: path contains directory traversal.');
 								return;
 							}
-							const {shell} = (globalThis.require as NodeRequire)('electron') as {shell: {openPath: (p: string) => Promise<string>}};
+							const {shell} = (globalThis.require as NodeJS.Require)('electron') as {shell: {openPath: (p: string) => Promise<string>}};
 							void shell.openPath(filePath);
 						} catch (e) {
 							new Notice(`Failed to open file: ${String(e)}`);
@@ -2179,7 +2179,7 @@ export class SidekickView extends ItemView {
 								new Notice('Cannot open image: path escapes the vault.');
 								return;
 							}
-							const {shell} = (globalThis.require as NodeRequire)('electron') as {shell: {openPath: (p: string) => Promise<string>}};
+							const {shell} = (globalThis.require as NodeJS.Require)('electron') as {shell: {openPath: (p: string) => Promise<string>}};
 							const absPath = this.getVaultBasePath() + '/' + vaultPath;
 							void shell.openPath(absPath);
 						} catch (e) {
@@ -2544,7 +2544,7 @@ export class SidekickView extends ItemView {
 		if (!rawInput || this.isStreaming) return;
 
 		if (!this.plugin.copilot) {
-			new Notice('Copilot is not configured. Go to Settings → Sidekick.');
+			new Notice('Copilot is not configured.');
 			return;
 		}
 
@@ -2600,7 +2600,7 @@ export class SidekickView extends ItemView {
 		// Update UI
 		this.addUserMessage(displayPrompt, currentAttachments, currentScopePaths);
 		this.inputEl.value = '';
-		this.inputEl.style.height = 'auto';
+		this.inputEl.setCssProps({'--input-height': 'auto'});
 		this.attachments = [];
 		this.renderAttachments();
 
@@ -2797,7 +2797,7 @@ export class SidekickView extends ItemView {
 		this.activeSessions.clear();
 	}
 
-	private async newConversation(): Promise<void> {
+	private newConversation(): void {
 		// Save the current session to background instead of destroying it
 		if (this.currentSession && this.currentSessionId) {
 			this.saveCurrentToBackground();

@@ -670,6 +670,7 @@
 	font-family: var(--font-interface);
 	font-size: var(--font-ui-small);
 	color: var(--text-normal);
+	height: var(--input-height, auto);
 	min-height: 24px;
 	max-height: 200px;
 	line-height: 1.5;
@@ -1008,6 +1009,7 @@ body.sidekick-no-select {
 	flex-shrink: 0;
 	overflow: hidden;
 	background: var(--background-secondary);
+	width: var(--sidebar-width, 40px);
 }
 
 .sidekick-sidebar-header {

@@ -150,7 +150,9 @@ export class VaultScopeModal extends Modal {
 				// Context menu on folder rows
 				row.addEventListener('contextmenu', (e) => {
 					e.preventDefault();
-					this.showFolderContextMenu(e, child as TFolder);
+					if (child instanceof TFolder) {
+						this.showFolderContextMenu(e, child);
+					}
 				});
 			} else {
 				row.createSpan({cls: 'sidekick-scope-toggle sidekick-scope-toggle-spacer'});

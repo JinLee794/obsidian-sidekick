@@ -36,17 +36,17 @@ declare const process: {
  */
 async function resolveDefaultCliPath(): Promise<string> {
 	// Lazy-load Node.js builtins so the module can be imported on mobile
-	const {join} = nodeRequire?.('node:path') as typeof import('node:path') ?? await import('node:path');
-	const {access} = nodeRequire?.('node:fs/promises') as typeof import('node:fs/promises') ?? await import('node:fs/promises');
+	const path = nodeRequire?.('node:path') as typeof import('node:path') ?? await import('node:path');
+	const fs = nodeRequire?.('node:fs/promises') as typeof import('node:fs/promises') ?? await import('node:fs/promises');
 	const nativePkg = `@github/copilot-${process.platform}-${process.arch}`;
 	const ext = process.platform === 'win32' ? '.exe' : '';
-	const nativeBin = join(__dirname, 'node_modules', nativePkg, `copilot${ext}`);
+	const nativeBin = path.join(__dirname, 'node_modules', nativePkg, `copilot${ext}`);
 	try {
-		await access(nativeBin);
+		await fs.access(nativeBin);
 		return nativeBin;
 	} catch {
 		// Fallback to the JS CLI entry point
-		return join(__dirname, 'node_modules', '@github', 'copilot', 'index.js');
+		return path.join(__dirname, 'node_modules', '@github', 'copilot', 'index.js');
 	}
 }
 
@@ -112,10 +112,10 @@ export class CopilotService {
 		}
 		// Local mode — spawn CLI process
 		const cliPath = this.cliPath || await resolveDefaultCliPath();
-		const {homedir} = nodeRequire?.('node:os') as typeof import('node:os') ?? await import('node:os');
+		const os = nodeRequire?.('node:os') as typeof import('node:os') ?? await import('node:os');
 		return new CopilotClient({
 			cliPath: cliPath,
-			cwd: homedir(),
+			cwd: os.homedir(),
 			env: cleanEnv(),
 			...(this.githubToken ? {githubToken: this.githubToken} : {}),
 			...(this.useLoggedInUser !== undefined ? {useLoggedInUser: this.useLoggedInUser} : {}),

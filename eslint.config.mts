@@ -17,24 +17,36 @@ const ALLOWED_UPPERCASE = new Set([
 function isSentenceCase(text: string): boolean {
 	// Skip very short strings, template-like strings, paths, URLs, placeholders
 	if (text.length < 2) return true;
-	// Skip placeholder-style strings (e.g. …, ghp_…, sk-…, model-id, localhost:)
-	if (/^(e\.g\.|ghp_|sk-|token|model-|localhost)/i.test(text)) return true;
+	// Skip pure placeholder-style strings (ghp_…, sk-…, model-id, localhost:)
+	if (/^(ghp_|sk-|token|model-|localhost)/i.test(text)) return true;
 	// Skip strings that start with a known brand/product followed by ':'
 	const brandPrefixMatch = text.match(/^(\w+):/);
 	if (brandPrefixMatch && ALLOWED_UPPERCASE.has(brandPrefixMatch[1])) return true;
-	if (/^[a-z]/.test(text)) return false; // must start uppercase
+	// Allow "e.g." prefix — strip it and check the rest
+	let checkText = text;
+	if (/^e\.g\.\s*/i.test(checkText)) {
+		checkText = checkText.replace(/^e\.g\.\s*/i, '').trim();
+		if (!checkText) return true;
+		// The remainder after "e.g." may start lowercase (it's an example list)
+	} else if (/^[a-z]/.test(text)) {
+		return false; // must start uppercase
+	}
 	// Split into sentences (after . ! ?) and check each independently
-	const sentences = text.split(/(?<=[.!?])\s+/);
+	const sentences = checkText.split(/(?<=[.!?])\s+/);
 	for (const sentence of sentences) {
 		const words = sentence.split(/\s+/);
 		// Start from word index 1 for the first sentence, 0th word of subsequent sentences is ok (new sentence)
 		const startIdx = sentence === sentences[0] ? 1 : 1;
 		for (let i = startIdx; i < words.length; i++) {
-			const word = words[i].replace(/[^a-zA-Z]/g, '');
-			if (!word) continue;
-			if (ALLOWED_UPPERCASE.has(word)) continue;
-			// If word starts uppercase and is not an allowed name, flag it
-			if (/^[A-Z]/.test(word) && !/^[A-Z]+$/.test(word)) return false;
+			// Split hyphenated words and check each part
+			const parts = words[i].split('-');
+			for (const part of parts) {
+				const clean = part.replace(/[^a-zA-Z]/g, '');
+				if (!clean) continue;
+				if (ALLOWED_UPPERCASE.has(clean)) continue;
+				// If word starts uppercase and is not an allowed name, flag it
+				if (/^[A-Z]/.test(clean) && !/^[A-Z]+$/.test(clean)) return false;
+			}
 		}
 	}
 	return true;
@@ -50,7 +62,7 @@ export default tseslint.config(
 					'ui-sentence-case': {
 						meta: {
 							type: 'suggestion',
-							docs: { description: 'Enforce sentence case for UI text in setTitle, setText, setPlaceholder, Notice, and button labels' },
+							docs: { description: 'Enforce sentence case for UI text in setTitle, setText, setPlaceholder, Notice, createEl, createSpan, createDiv, and attr title/placeholder' },
 							messages: {
 								notSentenceCase: 'UI text "{{text}}" should use sentence case.',
 							},
@@ -58,32 +70,75 @@ export default tseslint.config(
 						},
 						create(context: { report: (opts: { node: unknown; messageId: string; data: Record<string, string> }) => void }) {
 							const UI_METHODS = new Set(['setTitle', 'setText', 'setPlaceholder', 'setName', 'setDesc']);
+							const CREATE_METHODS = new Set(['createEl', 'createSpan', 'createDiv']);
+							const ATTR_TEXT_KEYS = new Set(['title', 'placeholder']);
+
+							/** Report a Literal node if its value is not sentence case. */
+							function checkLiteral(node: { type?: string; value?: unknown }) {
+								if (node?.type === 'Literal' && typeof node.value === 'string' && !isSentenceCase(node.value)) {
+									context.report({ node: node as unknown as never, messageId: 'notSentenceCase', data: { text: node.value } });
+								}
+							}
+
+							/** Find a Property node by key name inside an ObjectExpression. */
+							function findProp(obj: { type?: string; properties?: Array<{ key?: { name?: string; value?: string }; value?: unknown }> }, key: string) {
+								if (obj?.type !== 'ObjectExpression') return undefined;
+								return obj.properties?.find(
+									(p: { key?: { name?: string; value?: string } }) =>
+										(p.key?.name === key) || (p.key?.value === key)
+								);
+							}
+
 							return {
 								// .setTitle('Text'), .setText('Text'), etc.
-								CallExpression(node: { callee?: { type?: string; property?: { name?: string } }; arguments?: Array<{ type?: string; value?: unknown }> }) {
+								CallExpression(node: {
+									callee?: { type?: string; property?: { name?: string }; name?: string };
+									arguments?: Array<{ type?: string; value?: unknown; properties?: unknown[] }>;
+								}) {
+									const callee = node.callee;
+									const args = node.arguments;
+
+									// --- .setTitle / .setText / .setPlaceholder / .setName / .setDesc ---
 									if (
-										node.callee?.type === 'MemberExpression' &&
-										typeof node.callee.property?.name === 'string' &&
-										UI_METHODS.has(node.callee.property.name)
+										callee?.type === 'MemberExpression' &&
+										typeof callee.property?.name === 'string' &&
+										UI_METHODS.has(callee.property.name)
 									) {
-										const arg = node.arguments?.[0];
-										if (arg?.type === 'Literal' && typeof arg.value === 'string') {
-											if (!isSentenceCase(arg.value)) {
-												context.report({ node: arg as unknown as never, messageId: 'notSentenceCase', data: { text: arg.value } });
+										const arg = args?.[0];
+										checkLiteral(arg as { type?: string; value?: unknown });
+									}
+
+									// --- .createEl / .createSpan / .createDiv with {text: '...'} ---
+									if (
+										callee?.type === 'MemberExpression' &&
+										typeof callee.property?.name === 'string' &&
+										CREATE_METHODS.has(callee.property.name)
+									) {
+										// Options object is 1st arg for createSpan/createDiv, 2nd arg for createEl
+										const optsArg = callee.property.name === 'createEl' ? args?.[1] : args?.[0];
+										if (optsArg?.type === 'ObjectExpression') {
+											const textProp = findProp(optsArg as Parameters<typeof findProp>[0], 'text');
+											if (textProp) checkLiteral(textProp.value as { type?: string; value?: unknown });
+
+											// Also check attr: {title: '...', placeholder: '...'}
+											const attrProp = findProp(optsArg as Parameters<typeof findProp>[0], 'attr');
+											if (attrProp?.value && (attrProp.value as { type?: string }).type === 'ObjectExpression') {
+												const attrObj = attrProp.value as Parameters<typeof findProp>[0];
+												for (const key of ATTR_TEXT_KEYS) {
+													const kp = findProp(attrObj, key);
+													if (kp) checkLiteral(kp.value as { type?: string; value?: unknown });
+												}
 											}
 										}
 									}
-									// new Notice('Text')
+
+									// --- new Notice('Text') via CallExpression for `Notice(...)` ---
 									if (
-										node.callee?.type === 'Identifier' &&
-										(node.callee as unknown as { name: string }).name === 'Notice'
+										callee?.type === 'Identifier' &&
+										(callee as unknown as { name: string }).name === 'Notice'
 									) {
-										const arg = node.arguments?.[0];
-										if (arg?.type === 'Literal' && typeof arg.value === 'string') {
-											if (!isSentenceCase(arg.value)) {
-												context.report({ node: arg as unknown as never, messageId: 'notSentenceCase', data: { text: arg.value } });
-											}
-										}
+										const arg = args?.[0];
+										checkLiteral(arg as { type?: string; value?: unknown });
 									}
 								},
 								// new Notice('Text') via NewExpression
@@ -93,15 +148,9 @@ export default tseslint.config(
 										node.callee.name === 'Notice'
 									) {
 										const arg = node.arguments?.[0];
-										if (arg?.type === 'Literal' && typeof arg.value === 'string') {
-											if (!isSentenceCase(arg.value)) {
-												context.report({ node: arg as unknown as never, messageId: 'notSentenceCase', data: { text: arg.value } });
-											}
-										}
+										checkLiteral(arg as { type?: string; value?: unknown });
 									}
 								},
-								// createEl('button', {text: 'Text'})
-								// createEl('label', {text: 'Text'})
 							};
 						},
 					},
@@ -110,6 +159,7 @@ export default tseslint.config(
 		},
 		rules: {
 			'sidekick-custom/ui-sentence-case': 'error',
+			'@typescript-eslint/no-unused-vars': ['error', { argsIgnorePattern: '^_', varsIgnorePattern: '^_' }],
 		},
 		languageOptions: {
 			globals: {
