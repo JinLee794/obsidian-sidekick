@@ -548,10 +548,10 @@ export class SidekickView extends ItemView {
 		if (this.configRefreshTimer) clearTimeout(this.configRefreshTimer);
 		this.triggerScheduler?.stop();
 		if (this.basicSearchSession) {
-			try { await this.basicSearchSession.destroy(); } catch { /* ignore */ }
+			try { await this.basicSearchSession.disconnect(); } catch { /* ignore */ }
 			this.basicSearchSession = null;
 		}
-		await this.destroyAllSessions();
+		await this.disconnectAllSessions();
 	}
 
 	// ── UI construction ──────────────────────────────────────────
@@ -592,13 +592,11 @@ export class SidekickView extends ItemView {
 		this.buildSessionSidebar(this.chatPanelEl);
 
 		// ── Triggers panel ────────────────────────────────────
-		this.triggersPanelEl = this.mainEl.createDiv({cls: 'sidekick-tab-panel sidekick-tab-panel-triggers'});
-		this.triggersPanelEl.style.display = 'none';
+		this.triggersPanelEl = this.mainEl.createDiv({cls: 'sidekick-tab-panel sidekick-tab-panel-triggers is-hidden'});
 		this.buildTriggersPanel(this.triggersPanelEl);
 
 		// ── Search panel ─────────────────────────────────────
-		this.searchPanelEl = this.mainEl.createDiv({cls: 'sidekick-tab-panel sidekick-tab-panel-search'});
-		this.searchPanelEl.style.display = 'none';
+		this.searchPanelEl = this.mainEl.createDiv({cls: 'sidekick-tab-panel sidekick-tab-panel-search is-hidden'});
 		this.buildSearchPanel(this.searchPanelEl);
 	}
 
@@ -629,9 +627,9 @@ export class SidekickView extends ItemView {
 		});
 
 		// Show/hide panels
-		this.chatPanelEl.style.display = tab === 'chat' ? '' : 'none';
-		this.triggersPanelEl.style.display = tab === 'triggers' ? '' : 'none';
-		this.searchPanelEl.style.display = tab === 'search' ? '' : 'none';
+		this.chatPanelEl.toggleClass('is-hidden', tab !== 'chat');
+		this.triggersPanelEl.toggleClass('is-hidden', tab !== 'triggers');
+		this.searchPanelEl.toggleClass('is-hidden', tab !== 'search');
 	}
 
 	private renderWelcome(): void {
@@ -800,19 +798,7 @@ export class SidekickView extends ItemView {
 		setIcon(agentIcon, 'bot');
 		this.agentSelect = agentGroup.createEl('select', {cls: 'sidekick-select'});
 		this.agentSelect.addEventListener('change', () => {
-			this.selectedAgent = this.agentSelect.value;
-			const agent = this.agents.find(a => a.name === this.selectedAgent);
-			// Update tooltip to show the selected agent's instructions
-			this.agentSelect.title = agent ? agent.instructions : '';
-			// Auto-select agent's preferred model
-			const resolvedModel = this.resolveModelForAgent(agent, this.selectedModel || undefined);
-			if (resolvedModel && resolvedModel !== this.selectedModel) {
-				this.selectedModel = resolvedModel;
-				this.modelSelect.value = resolvedModel;
-			}
-			// Apply agent's tools and skills filter
-			this.applyAgentToolsAndSkills(agent);
-			this.configDirty = true;
+			this.selectAgent(this.agentSelect.value);
 		});
 
 		// Model dropdown
@@ -878,9 +864,9 @@ export class SidekickView extends ItemView {
 				if (value === undefined) {
 					// Prompt user for the missing value
 					value = await new Promise<string | undefined>(resolve => {
-						const modal = new McpInputPromptModal(this.app, input, async (v) => {
+						const modal = new McpInputPromptModal(this.app, input, (v) => {
 							if (v !== undefined) {
-								await setMcpInputValue(this.app, this.plugin, input.id, v, isPassword);
+								void setMcpInputValue(this.app, this.plugin, input.id, v, isPassword);
 							}
 							resolve(v);
 						});
@@ -982,7 +968,7 @@ export class SidekickView extends ItemView {
 	private updateConfigUI(): void {
 		// Agents
 		this.agentSelect.empty();
-		const noAgent = this.agentSelect.createEl('option', {text: 'Agent', attr: {value: ''}});
+		const noAgent = this.agentSelect.createEl('option', {text: 'Auto', attr: {value: ''}});
 		noAgent.value = '';
 		for (const agent of this.agents) {
 			const opt = this.agentSelect.createEl('option', {text: agent.name});
@@ -1079,13 +1065,12 @@ export class SidekickView extends ItemView {
 		const current = this.plugin.settings.reasoningEffort;
 		const active = current !== '' && !!supportsReasoning;
 		this.modelIconEl.toggleClass('is-active', active);
+		this.modelIconEl.toggleClass('is-non-interactive', !supportsReasoning);
 		if (!supportsReasoning) {
 			this.modelIconEl.setAttribute('title', 'Model does not support reasoning effort');
-			this.modelIconEl.style.cursor = 'default';
 		} else {
 			const label = current === '' ? 'Reasoning effort' : `Reasoning effort: ${current.charAt(0).toUpperCase() + current.slice(1)}`;
 			this.modelIconEl.setAttribute('title', label);
-			this.modelIconEl.style.cursor = 'pointer';
 		}
 	}
 
@@ -1164,6 +1149,46 @@ export class SidekickView extends ItemView {
 	 * If the agent specifies a list, enable only those.
 	 * If the list is empty/undefined or the agent has no preference, enable all.
 	 */
+	/**
+	 * Switch to the named agent: update state, dropdown, model, tools/skills, and mark config dirty.
+	 * No-op if the agent name is not found.
+	 */
+	private selectAgent(agentName: string): void {
+		// Handle deselecting (empty = "Auto" / no agent)
+		if (!agentName) {
+			this.selectedAgent = '';
+			this.agentSelect.value = '';
+			this.agentSelect.selectedIndex = 0;
+			this.agentSelect.title = '';
+			this.applyAgentToolsAndSkills(undefined);
+			this.configDirty = true;
+			return;
+		}
+		const agent = this.agents.find(a => a.name === agentName)
+			// Fallback: case-insensitive match
+			?? this.agents.find(a => a.name.toLowerCase() === agentName.toLowerCase());
+		if (!agent) return; // No matching agent found — leave dropdown unchanged
+		this.selectedAgent = agent.name;
+		// Update the dropdown — set both .value and .selectedIndex for reliability
+		this.agentSelect.value = agent.name;
+		const opts = this.agentSelect.options;
+		for (let i = 0; i < opts.length; i++) {
+			if (opts[i]!.value === agent.name) {
+				this.agentSelect.selectedIndex = i;
+				break;
+			}
+		}
+		this.agentSelect.title = agent.instructions;
+		// Auto-select agent's preferred model
+		const resolvedModel = this.resolveModelForAgent(agent, this.selectedModel || undefined);
+		if (resolvedModel && resolvedModel !== this.selectedModel) {
+			this.selectedModel = resolvedModel;
+			this.modelSelect.value = resolvedModel;
+		}
+		this.applyAgentToolsAndSkills(agent);
+		this.configDirty = true;
+	}
+
 	private applyAgentToolsAndSkills(agent?: AgentConfig): void {
 		// Tools: undefined = enable all, [] = disable all, [...] = enable listed
 		if (agent?.tools !== undefined) {
@@ -1359,7 +1384,7 @@ export class SidekickView extends ItemView {
 			this.editorHadFocus = false;
 			this.app.workspace.iterateAllLeaves(leaf => {
 				if (!mdView && leaf.view instanceof MarkdownView) {
-					mdView = leaf.view as MarkdownView;
+					mdView = leaf.view;
 				}
 			});
 			editorIsActive = false;
@@ -1771,17 +1796,7 @@ export class SidekickView extends ItemView {
 
 		// Auto-select the prompt's agent
 		if (selected.agent) {
-			const matchingAgent = this.agents.find(a => a.name === selected.agent);
-			if (matchingAgent) {
-				this.selectedAgent = matchingAgent.name;
-				this.agentSelect.value = matchingAgent.name;
-				const resolvedModel = this.resolveModelForAgent(matchingAgent, this.selectedModel || undefined);
-				if (resolvedModel && resolvedModel !== this.selectedModel) {
-					this.selectedModel = resolvedModel;
-					this.modelSelect.value = resolvedModel;
-				}
-				this.configDirty = true;
-			}
+			this.selectAgent(selected.agent);
 		}
 
 		// Replace input with /prompt-name + space
@@ -2162,7 +2177,7 @@ export class SidekickView extends ItemView {
 				if (evicted) {
 					for (const unsub of evicted.unsubscribers) unsub();
 					evicted.savedDom = null; // release DOM fragment
-					try { void evicted.session.destroy(); } catch { /* ignore */ }
+					try { void evicted.session.disconnect(); } catch { /* ignore */ }
 					this.activeSessions.delete(oldestKey);
 				}
 			}
@@ -2377,15 +2392,8 @@ export class SidekickView extends ItemView {
 		const colonIdx = sessionName.indexOf(':');
 		if (colonIdx > 0) {
 			const agentName = sessionName.substring(0, colonIdx).trim();
-			const matchingAgent = this.agents.find(a => a.name === agentName);
-			if (matchingAgent) {
-				this.selectedAgent = matchingAgent.name;
-				this.agentSelect.value = matchingAgent.name;
-				const resolvedModel = this.resolveModelForAgent(matchingAgent, this.selectedModel || undefined);
-				if (resolvedModel && resolvedModel !== this.selectedModel) {
-					this.selectedModel = resolvedModel;
-					this.modelSelect.value = resolvedModel;
-				}
+			if (this.agents.some(a => a.name === agentName)) {
+				this.selectAgent(agentName);
 			}
 		}
 	}
@@ -2451,7 +2459,7 @@ export class SidekickView extends ItemView {
 						timestamp: new Date(event.timestamp).getTime(),
 					};
 					this.messages.push(msg);
-					this.renderMessageBubble(msg);
+					renderPromises.push(this.renderMessageBubble(msg));
 				} else if (event.type === 'assistant.message') {
 					const msg: ChatMessage = {
 						id: event.id,
@@ -2553,7 +2561,7 @@ export class SidekickView extends ItemView {
 		const bg = this.activeSessions.get(sessionId);
 		if (bg) {
 			for (const unsub of bg.unsubscribers) unsub();
-			try { await bg.session.destroy(); } catch { /* ignore */ }
+			try { await bg.session.disconnect(); } catch { /* ignore */ }
 			if (bg.streamingComponent) {
 				try { this.removeChild(bg.streamingComponent); } catch { /* ignore */ }
 			}
@@ -2745,9 +2753,9 @@ export class SidekickView extends ItemView {
 		void this.plugin.saveSettings();
 		this.updateSearchModeToggle();
 		this.updateSearchAdvancedVisibility();
-		// Destroy cached basic session when switching modes
+		// Disconnect cached basic session when switching modes
 		if (newMode === 'advanced' && this.basicSearchSession) {
-			void this.basicSearchSession.destroy().catch(() => {});
+			void this.basicSearchSession.disconnect().catch(() => {});
 			this.basicSearchSession = null;
 		}
 	}
@@ -2765,7 +2773,7 @@ export class SidekickView extends ItemView {
 	}
 
 	private updateSearchAdvancedVisibility(): void {
-		this.searchAdvancedToolbarEl.style.display = this.searchMode === 'advanced' ? '' : 'none';
+		this.searchAdvancedToolbarEl.toggleClass('is-hidden', this.searchMode !== 'advanced');
 	}
 
 	private updateSearchConfigUI(): void {
@@ -2958,14 +2966,17 @@ export class SidekickView extends ItemView {
 			.filter(s => !this.searchEnabledSkills.has(s.name))
 			.map(s => s.name);
 
-		// Custom agents
-		const customAgents: CustomAgentConfig[] = this.agents.map(a => ({
+		// Custom agents — only the selected search agent, or all if none selected
+		const agentPool = this.searchAgent
+			? this.agents.filter(a => a.name === this.searchAgent)
+			: this.agents;
+		const customAgents: CustomAgentConfig[] = agentPool.map(a => ({
 			name: a.name,
 			displayName: a.name,
 			description: a.description || undefined,
 			prompt: a.instructions,
 			tools: a.tools ?? null,
-			infer: this.searchAgent ? a.name === this.searchAgent : true,
+			infer: true,
 		}));
 
 		// Permission handler
@@ -3016,7 +3027,7 @@ export class SidekickView extends ItemView {
 				try { await session.abort(); } catch { /* ignore */ }
 			}
 			if (this.searchMode === 'advanced' && this.searchSession) {
-				try { await this.searchSession.destroy(); } catch { /* ignore */ }
+				try { await this.searchSession.disconnect(); } catch { /* ignore */ }
 				this.searchSession = null;
 			}
 			this.isSearching = false;
@@ -3073,7 +3084,7 @@ export class SidekickView extends ItemView {
 			this.renderSearchResults(content);
 		} catch (e) {
 			// Session may be broken — discard and rethrow so outer catch handles it
-			try { await this.basicSearchSession.destroy(); } catch { /* ignore */ }
+			try { await this.basicSearchSession.disconnect(); } catch { /* ignore */ }
 			this.basicSearchSession = null;
 			throw e;
 		}
@@ -3103,7 +3114,7 @@ export class SidekickView extends ItemView {
 		this.renderSessionList();
 
 		const searchPrompt = this.searchAgent
-			? `/${this.searchAgent} Perform a semantic search for files matching the following query. Return ONLY a JSON array of objects, each with "file" (vault-relative path), "folder" (parent folder path), and "reason" (brief description why it matches). Sort by relevance (best match first). No markdown fences, no extra text.\n\nQuery: ${query}`
+			? `Perform a semantic search for files matching the following query. Return ONLY a JSON array of objects, each with "file" (vault-relative path), "folder" (parent folder path), and "reason" (brief description why it matches). Sort by relevance (best match first). No markdown fences, no extra text.\n\nQuery: ${query}`
 			: `Perform a semantic search for files matching the following query. Return ONLY a JSON array of objects, each with "file" (vault-relative path), "folder" (parent folder path), and "reason" (brief description why it matches). Sort by relevance (best match first). No markdown fences, no extra text.\n\nQuery: ${query}`;
 
 		const scopePath = this.getSearchWorkingDirectory();
@@ -3117,7 +3128,7 @@ export class SidekickView extends ItemView {
 			this.renderSearchResults(content);
 		} finally {
 			if (this.searchSession) {
-				try { await this.searchSession.destroy(); } catch { /* ignore */ }
+				try { await this.searchSession.disconnect(); } catch { /* ignore */ }
 				this.searchSession = null;
 			}
 		}
@@ -3458,7 +3469,7 @@ export class SidekickView extends ItemView {
 		if (!this.triggerConfigListEl) return;
 		this.triggerConfigListEl.empty();
 
-		let items = [...this.triggers];
+		const items = [...this.triggers];
 
 		// Sort
 		if (this.triggerConfigSort === 'name') {
@@ -3579,7 +3590,7 @@ export class SidekickView extends ItemView {
 			})
 		);
 		this.registerEvent(
-			this.app.vault.on('rename', (file, oldPath) => {
+			this.app.vault.on('rename', (file, _oldPath) => {
 				if (!(file instanceof TFile)) return;
 				scheduleFileChangeCheck(file.path);
 			})
@@ -3692,14 +3703,14 @@ export class SidekickView extends ItemView {
 			attachments: allAttachments.length > 0 ? allAttachments : undefined,
 		};
 		this.messages.push(msg);
-		this.renderMessageBubble(msg);
+		void this.renderMessageBubble(msg);
 		this.scrollToBottom();
 	}
 
 	private addInfoMessage(text: string): void {
 		const msg: ChatMessage = {id: `i-${Date.now()}`, role: 'info', content: text, timestamp: Date.now()};
 		this.messages.push(msg);
-		this.renderMessageBubble(msg);
+		void this.renderMessageBubble(msg);
 		this.scrollToBottom();
 	}
 
@@ -4161,11 +4172,8 @@ export class SidekickView extends ItemView {
 
 	/** Disable config controls that cannot be changed mid-session. */
 	private updateToolbarLock(): void {
-		const locked = !!(this.currentSession && !this.configDirty);
-		this.modelIconEl.toggleClass('is-disabled', locked);
-		this.skillsBtnEl.disabled = locked;
-		this.toolsBtnEl.disabled = locked;
-		this.cwdBtnEl.disabled = locked;
+		// No-op: all config changes set configDirty = true, which triggers
+		// a new session on the next send. No need to lock controls.
 	}
 
 	private updateSendButton(): void {
@@ -4242,16 +4250,7 @@ export class SidekickView extends ItemView {
 
 		// Auto-select agent from prompt if specified
 		if (usedPrompt?.agent) {
-			const matchingAgent = this.agents.find(a => a.name === usedPrompt.agent);
-			if (matchingAgent) {
-				this.selectedAgent = matchingAgent.name;
-				this.agentSelect.value = matchingAgent.name;
-				const resolvedModel = this.resolveModelForAgent(matchingAgent, this.selectedModel || undefined);
-				if (resolvedModel && resolvedModel !== this.selectedModel) {
-					this.selectedModel = resolvedModel;
-					this.modelSelect.value = resolvedModel;
-				}
-			}
+			this.selectAgent(usedPrompt.agent);
 		}
 
 		// Prepend prompt template content if active
@@ -4286,12 +4285,7 @@ export class SidekickView extends ItemView {
 			}
 
 			const sdkAttachments = this.buildSdkAttachments(currentAttachments);
-			let fullPrompt = this.buildPrompt(sendPrompt, currentAttachments);
-
-			// Mention the selected agent so the SDK routes to it
-			if (this.selectedAgent) {
-				fullPrompt = `/${this.selectedAgent} ${fullPrompt}`;
-			}
+			const fullPrompt = this.buildPrompt(sendPrompt, currentAttachments);
 
 			try {
 				await this.currentSession!.send({
@@ -4351,7 +4345,7 @@ export class SidekickView extends ItemView {
 		if (this.currentSession) {
 			this.unsubscribeEvents();
 			try {
-				await this.currentSession.destroy();
+				await this.currentSession.disconnect();
 			} catch { /* ignore */ }
 			this.currentSession = null;
 		}
@@ -4447,22 +4441,22 @@ export class SidekickView extends ItemView {
 		this.eventUnsubscribers = [];
 	}
 
-	private async destroySession(): Promise<void> {
+	private async disconnectSession(): Promise<void> {
 		this.unsubscribeEvents();
 		if (this.currentSession) {
 			try {
-				await this.currentSession.destroy();
+				await this.currentSession.disconnect();
 			} catch { /* ignore */ }
 			this.currentSession = null;
 		}
 	}
 
-	/** Destroy all sessions — current and background. Used on plugin close. */
-	private async destroyAllSessions(): Promise<void> {
-		await this.destroySession();
+	/** Disconnect all sessions — current and background. Used on plugin close. */
+	private async disconnectAllSessions(): Promise<void> {
+		await this.disconnectSession();
 		for (const [, bg] of this.activeSessions) {
 			for (const unsub of bg.unsubscribers) unsub();
-			try { await bg.session.destroy(); } catch { /* ignore */ }
+			try { await bg.session.disconnect(); } catch { /* ignore */ }
 			if (bg.streamingComponent) {
 				try { this.removeChild(bg.streamingComponent); } catch { /* ignore */ }
 			}
@@ -4471,7 +4465,7 @@ export class SidekickView extends ItemView {
 	}
 
 	private newConversation(): void {
-		// Save the current session to background instead of destroying it
+		// Save the current session to background instead of disconnecting it
 		if (this.currentSession && this.currentSessionId) {
 			this.saveCurrentToBackground();
 		} else {
@@ -4672,14 +4666,17 @@ export class SidekickView extends ItemView {
 			.filter(s => !this.enabledSkills.has(s.name))
 			.map(s => s.name);
 
-		// Custom agents — register all agents from the agents folder
-		const customAgents: CustomAgentConfig[] = this.agents.map(a => ({
+		// Custom agents — only the selected agent, or all if none selected
+		const agentPool = opts.selectedAgentName
+			? this.agents.filter(a => a.name === opts.selectedAgentName)
+			: this.agents;
+		const customAgents: CustomAgentConfig[] = agentPool.map(a => ({
 			name: a.name,
 			displayName: a.name,
 			description: a.description || undefined,
 			prompt: a.instructions,
 			tools: a.tools ?? null,
-			infer: opts.selectedAgentName ? a.name === opts.selectedAgentName : true,
+			infer: true,
 		}));
 
 		// Permission handler

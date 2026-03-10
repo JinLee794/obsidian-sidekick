@@ -172,7 +172,6 @@ export class TriggerScheduler {
 				if (cronMatches(trigger.cron, now)) {
 					const lastFired = this.callbacks.getLastFired(trigger.name);
 					if (lastFired < minuteKey) {
-						console.log(`Sidekick: firing cron trigger "${trigger.name}"`);
 						this.callbacks.setLastFired(trigger.name, minuteKey);
 						this.callbacks.onTriggerFire(trigger);
 					}
@@ -202,7 +201,6 @@ export class TriggerScheduler {
 				const lastFired = this.callbacks.getLastFired(key);
 				const elapsed = now - lastFired;
 				if (elapsed > 5_000) {
-					console.log(`Sidekick: firing trigger "${trigger.name}" for file "${filePath}"`);
 					this.callbacks.setLastFired(key, now);
 					this.callbacks.onTriggerFire(trigger, {filePath});
 				} else {

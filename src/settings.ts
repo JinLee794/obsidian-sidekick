@@ -376,7 +376,7 @@ export class SidekickSettingTab extends PluginSettingTab {
 						text.inputEl.type = 'password';
 						text.setPlaceholder('')
 							.setValue(this.plugin.settings.providerApiKey)
-							.onChange(async (value) => {
+							.onChange((value) => {
 								updateSecureField(this.app, this.plugin, 'providerApiKey', value.trim());
 							});
 					});
@@ -388,7 +388,7 @@ export class SidekickSettingTab extends PluginSettingTab {
 						text.inputEl.type = 'password';
 						text.setPlaceholder('')
 							.setValue(this.plugin.settings.providerBearerToken)
-							.onChange(async (value) => {
+							.onChange((value) => {
 								updateSecureField(this.app, this.plugin, 'providerBearerToken', value.trim());
 							});
 					});
@@ -447,7 +447,7 @@ export class SidekickSettingTab extends PluginSettingTab {
 						if (!this.plugin.copilot) {
 							throw new Error('Copilot service is not available');
 						}
-						// Attempt to create (and immediately destroy) a session to validate provider config
+						// Attempt to create (and immediately disconnect) a session to validate provider config
 						const testSession = await this.plugin.copilot.createSession({
 							onPermissionRequest: () => ({allow: false, kind: 'denied-interactively-by-user' as const}),
 							...(this.plugin.settings.providerModel ? {model: this.plugin.settings.providerModel} : {}),
@@ -468,7 +468,7 @@ export class SidekickSettingTab extends PluginSettingTab {
 								})()}
 								: {}),
 						});
-						await testSession.destroy();
+						await testSession.disconnect();
 						new Notice('Provider session created successfully.');
 						await refreshModels();
 					} catch (e) {
@@ -642,17 +642,16 @@ export class SidekickSettingTab extends PluginSettingTab {
 
 		// ── MCP input variables section (collapsible) ───────────
 		let mcpExpanded = false;
-		const mcpInputsEl = containerEl.createDiv();
-		mcpInputsEl.style.display = 'none';
+		const mcpInputsEl = containerEl.createDiv({cls: 'is-hidden'});
 		new Setting(containerEl.createDiv())
-			.setName('MCP input variables')
+			.setName('Input variables')
 			.setHeading()
 			.addExtraButton(btn => btn
 				.setIcon('chevron-right')
 				.setTooltip('Toggle section')
 				.onClick(() => {
 					mcpExpanded = !mcpExpanded;
-					mcpInputsEl.style.display = mcpExpanded ? '' : 'none';
+					mcpInputsEl.toggleClass('is-hidden', !mcpExpanded);
 					btn.setIcon(mcpExpanded ? 'chevron-down' : 'chevron-right');
 				}));
 		containerEl.appendChild(mcpInputsEl);
@@ -714,7 +713,7 @@ export class SidekickSettingTab extends PluginSettingTab {
 const MCP_SECRET_PREFIX = 'sidekick-mcp-input-';
 
 /** Retrieve the stored value for an MCP input variable. */
-export async function getMcpInputValue(app: App, plugin: SidekickPlugin, id: string, isPassword: boolean): Promise<string | undefined> {
+export function getMcpInputValue(app: App, plugin: SidekickPlugin, id: string, isPassword: boolean): string | undefined {
 	if (isPassword) {
 		const stored = app.loadLocalStorage(MCP_SECRET_PREFIX + id);
 		return stored != null ? String(stored) : undefined;
@@ -760,7 +759,7 @@ export class McpInputPromptModal extends Modal {
 
 	onOpen(): void {
 		const {contentEl} = this;
-		contentEl.createEl('h3', {text: 'MCP input required'});
+		contentEl.createEl('h3', {text: 'Input required'});
 		contentEl.createEl('p', {text: this.input.description});
 		contentEl.createEl('p', {text: `Variable: ${this.input.id}`, cls: 'setting-item-description'});
 

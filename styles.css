@@ -910,7 +910,9 @@
 	gap: 4px;
 }
 
-.sidekick-attachments-bar.is-hidden {
+/* ── Utility: hide any element with .is-hidden ───────────────── */
+
+.is-hidden {
 	display: none;
 }
 
@@ -962,9 +964,7 @@
 	color: var(--text-muted);
 }
 
-.sidekick-scope-bar.is-hidden {
-	display: none;
-}
+
 
 .sidekick-scope-label {
 	display: flex;
@@ -1156,6 +1156,10 @@
 
 .sidekick-toolbar-icon.clickable-icon:hover {
 	background: var(--background-modifier-hover);
+}
+
+.sidekick-toolbar-icon.clickable-icon.is-non-interactive {
+	cursor: default;
 }
 
 .sidekick-toolbar-icon.is-active svg {
@@ -1607,11 +1611,7 @@ body.sidekick-no-select {
 	border-bottom: 1px dotted currentColor;
 }
 
-/* ── Utility: hidden elements in sidebar when collapsed ───────── */
 
-.sidekick-sidebar .is-hidden {
-	display: none;
-}
 
 /* ── Modal helper classes ─────────────────────────────────────── */
 
@@ -1695,10 +1695,16 @@ body.sidekick-no-select {
 	box-shadow: 0 0 0 2px rgba(var(--interactive-accent-rgb), 0.15);
 }
 
+.sidekick-edit-userinput-textarea {
+	width: 100%;
+	margin-top: 8px;
+}
+
 .sidekick-edit-prompt-area {
 	min-height: unset;
 	resize: vertical;
-	overflow-y: hidden;
+	height: var(--prompt-height, auto);
+	overflow-y: var(--prompt-overflow, hidden);
 	line-height: 1.5;
 }
 

@@ -216,7 +216,7 @@ export class CopilotService {
 	/**
 	 * Send a single prompt and wait for the assistant's response.
 	 * Creates a temporary session, sends the message, waits for idle,
-	 * then destroys the session.
+	 * then disconnect the session.
 	 *
 	 * @param prompt - The user prompt.
 	 * @param model  - Model to use (e.g. "gpt-5", "claude-sonnet-4.5").
@@ -250,13 +250,13 @@ export class CopilotService {
 				});
 			return response?.data.content;
 		} finally {
-			await session.destroy();
+			await session.disconnect();
 		}
 	}
 
 	/**
 	 * Send a single prompt, wait for the response, and keep the session alive.
-	 * Like chat() but the session is NOT destroyed, so it persists in the
+	 * Like chat() but the session is NOT disconnected, so it persists in the
 	 * session list and can be resumed later.
 	 *
 	 * @returns Object containing the assistant's response content and the sessionId.

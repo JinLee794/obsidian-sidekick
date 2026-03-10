@@ -542,9 +542,7 @@ async function runActionPrompt(
 			}
 
 			if (request.allowFreeform !== false) {
-				const input = modal.contentEl.createEl('textarea', {attr: {placeholder: 'Type your answer\u2026', rows: '3'}});
-				input.style.width = '100%';
-				input.style.marginTop = '8px';
+				const input = modal.contentEl.createEl('textarea', {cls: 'sidekick-edit-userinput-textarea', attr: {placeholder: 'Type your answer\u2026', rows: '3'}});
 				const btnRow = modal.contentEl.createDiv({cls: 'modal-button-container'});
 				const submitBtn = btnRow.createEl('button', {text: 'Submit', cls: 'mod-cta'});
 				submitBtn.addEventListener('click', () => {

@@ -121,7 +121,7 @@ export class EditModal extends Modal {
 
 		// Restore persisted form defaults
 		const d = plugin.settings.editModalDefaults ?? DEFAULT_EDIT_MODAL;
-		this.task = (d.task ?? DEFAULT_EDIT_MODAL.task) as TaskLabel;
+		this.task = d.task ?? DEFAULT_EDIT_MODAL.task;
 		this.adjustTask = d.adjustTask ?? DEFAULT_EDIT_MODAL.adjustTask;
 		this.tone = (d.tone ?? DEFAULT_EDIT_MODAL.tone) as Tone;
 		this.adjustTone = d.adjustTone ?? DEFAULT_EDIT_MODAL.adjustTone;
@@ -141,8 +141,7 @@ export class EditModal extends Modal {
 		this.formContainer = contentEl.createDiv({cls: 'sidekick-edit-form'});
 		this.buildForm(this.formContainer);
 
-		this.resultsContainer = contentEl.createDiv({cls: 'sidekick-edit-results'});
-		this.resultsContainer.style.display = 'none';
+		this.resultsContainer = contentEl.createDiv({cls: 'sidekick-edit-results is-hidden'});
 	}
 
 	onClose(): void {
@@ -201,7 +200,7 @@ export class EditModal extends Modal {
 		}
 		this.taskSelect.value = this.task;
 		if (!this.adjustTask) this.taskSelect.addClass('is-disabled');
-		this.taskSelect.addEventListener('change', () => { this.task = this.taskSelect.value as TaskLabel; });
+		this.taskSelect.addEventListener('change', () => { this.task = this.taskSelect.value; });
 		taskGroup.addEventListener('click', (e) => {
 			if (!this.adjustTask && e.target !== taskCheckbox) {
 				this.adjustTask = true;
@@ -283,7 +282,6 @@ export class EditModal extends Modal {
 			attr: {title: 'Enable length adjustment'},
 		});
 		lengthCheckbox.checked = this.adjustLength;
-		const lengthTextSpan = lengthLabelRow.createSpan({text: 'Length: '});
 		this.lengthValue = lengthLabelRow.createSpan({text: String(this.length), cls: 'sidekick-edit-slider-value'});
 		this.lengthSlider = lengthGroup.createEl('input', {
 			type: 'range',
@@ -316,10 +314,12 @@ export class EditModal extends Modal {
 			this.promptArea.value = this.editPrompt;
 		}
 		this.promptArea.addEventListener('input', () => {
-			this.promptArea.style.height = 'auto';
+			this.promptArea.setCssProps({'--prompt-height': 'auto'});
 			const clamped = Math.min(this.promptArea.scrollHeight, this.promptAreaMaxHeight);
-			this.promptArea.style.height = clamped + 'px';
-			this.promptArea.style.overflowY = this.promptArea.scrollHeight > this.promptAreaMaxHeight ? 'auto' : 'hidden';
+			this.promptArea.setCssProps({
+				'--prompt-height': clamped + 'px',
+				'--prompt-overflow': this.promptArea.scrollHeight > this.promptAreaMaxHeight ? 'auto' : 'hidden',
+			});
 		});
 		this.promptArea.addEventListener('keydown', (e: KeyboardEvent) => {
 			if (e.key === 'Enter' && (e.ctrlKey || e.metaKey)) {
@@ -360,7 +360,7 @@ export class EditModal extends Modal {
 			}
 		});
 
-		this.sendBtn = btnRow.createEl('button', {cls: 'sidekick-edit-btn-primary', attr: {title: 'Generate choices (Ctrl+Enter)'}});
+		this.sendBtn = btnRow.createEl('button', {cls: 'sidekick-edit-btn-primary', attr: {title: 'Generate choices (ctrl+enter)'}});
 		this.sendBtnIcon = this.sendBtn.createSpan({cls: 'sidekick-edit-btn-icon'});
 		setIcon(this.sendBtnIcon, 'arrow-right');
 		this.sendBtn.addEventListener('click', () => {
@@ -404,9 +404,7 @@ export class EditModal extends Modal {
 
 		// Show "Generating…" in the results header
 		this.resultsContainer.empty();
-		this.resultsContainer.style.display = '';
-		const generatingHeader = this.resultsContainer.createDiv({cls: 'sidekick-edit-results-header'});
-		const generatingSpan = generatingHeader.createSpan({text: 'Generating…', cls: 'sidekick-edit-generating'});
+		this.resultsContainer.removeClass('is-hidden');
 
 		const startTime = performance.now();
 
@@ -493,9 +491,7 @@ export class EditModal extends Modal {
 				}
 
 				if (request.allowFreeform !== false) {
-					const input = modal.contentEl.createEl('textarea', {attr: {placeholder: 'Type your answer\u2026', rows: '3'}});
-					input.style.width = '100%';
-					input.style.marginTop = '8px';
+					const input = modal.contentEl.createEl('textarea', {cls: 'sidekick-edit-userinput-textarea', attr: {placeholder: 'Type your answer\u2026', rows: '3'}});
 					const btnRow = modal.contentEl.createDiv({cls: 'modal-button-container'});
 					const submitBtn = btnRow.createEl('button', {text: 'Submit', cls: 'mod-cta'});
 					submitBtn.addEventListener('click', () => {
@@ -612,7 +608,7 @@ export class EditModal extends Modal {
 		refineBtn.addEventListener('click', () => {
 			this.textArea.value = text;
 			this.resultsContainer.empty();
-			this.resultsContainer.style.display = 'none';
+			this.resultsContainer.addClass('is-hidden');
 			this.textArea.focus();
 		});
 
