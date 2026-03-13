@@ -830,8 +830,8 @@ export class SidekickSettingTab extends PluginSettingTab {
 		updateConnectButton();
 
 		new Setting(panel)
-			.setName('Bot ID')
-			.setDesc('The numeric bot ID (e.g. yourunique_bot).')
+			.setName('Bot identifier')
+			.setDesc('The numeric bot id (e.g. yourunique_bot).')
 			.addText(text => text
 				.setPlaceholder('_bot')
 				.setValue(this.plugin.settings.telegramBotId)

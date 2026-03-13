@@ -11,6 +11,8 @@
  * Reference: https://core.telegram.org/bots/api
  */
 
+import {requestUrl} from 'obsidian';
+
 const TELEGRAM_API = 'https://api.telegram.org';
 
 /** Telegram User object (subset). */
@@ -143,12 +145,13 @@ export class TelegramApi {
 	/** Call a Telegram Bot API method. */
 	private async call<T>(method: string, params?: Record<string, unknown>): Promise<T> {
 		const url = `${this.baseUrl}/${method}`;
-		const resp = await fetch(url, {
+		const resp = await requestUrl({
+			url,
 			method: 'POST',
-			headers: {'Content-Type': 'application/json'},
+			contentType: 'application/json',
 			body: params ? JSON.stringify(params) : undefined,
 		});
-		const data = (await resp.json()) as TelegramApiResponse<T>;
+		const data = resp.json as TelegramApiResponse<T>;
 		if (!data.ok) {
 			throw new TelegramApiError(data.error_code ?? resp.status, data.description ?? 'Unknown error');
 		}
@@ -202,10 +205,7 @@ export class TelegramApi {
 	/** Download a file by its file_path (from getFile). Returns the file as an ArrayBuffer. */
 	async downloadFile(filePath: string): Promise<ArrayBuffer> {
 		const url = `${TELEGRAM_API}/file/bot${this.token}/${filePath}`;
-		const resp = await fetch(url);
-		if (!resp.ok) {
-			throw new TelegramApiError(resp.status, `Failed to download file: ${resp.statusText}`);
-		}
-		return resp.arrayBuffer();
+		const resp = await requestUrl({url});
+		return resp.arrayBuffer;
 	}
 }

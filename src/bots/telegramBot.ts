@@ -109,7 +109,7 @@ export class TelegramBotService {
 	}
 
 	/** Stop polling and disconnect. */
-	async disconnect(): Promise<void> {
+	disconnect(): void {
 		this.polling = false;
 		if (this.pollAbort) {
 			this.pollAbort.abort();
@@ -537,9 +537,9 @@ export class TelegramBotService {
 			const s = this.plugin.settings;
 
 			// Resolve stored input values (no UI prompts — bot runs headless)
-			const inputResolver: InputResolver = async (input) => {
+			const inputResolver: InputResolver = (input) => {
 				const isPassword = input.password === true;
-				return getMcpInputValue(app, this.plugin, input.id, isPassword);
+				return Promise.resolve(getMcpInputValue(app, this.plugin, input.id, isPassword));
 			};
 
 			const [agents, skills, mcpServers] = await Promise.all([
