@@ -74,10 +74,10 @@ copilot --version
 
 If not found, look here:
 
-| OS | Typical path |
-|----|-------------|
-| **Windows** | `%LOCALAPPDATA%\Programs\copilot-cli\copilot.exe` or `%USERPROFILE%\.vscode\extensions\github.copilot-*\copilot\dist\` |
-| **Linux / macOS** | `~/.local/bin/copilot` or `~/.vscode/extensions/github.copilot-*/copilot/dist/` |
+| OS                      | Typical path                                                                                                               |
+| ----------------------- | -------------------------------------------------------------------------------------------------------------------------- |
+| **Windows**       | `%LOCALAPPDATA%\Programs\copilot-cli\copilot.exe` or `%USERPROFILE%\.vscode\extensions\github.copilot-*\copilot\dist\` |
+| **Linux / macOS** | `~/.local/bin/copilot` or `~/.vscode/extensions/github.copilot-*/copilot/dist/`                                        |
 
 **Authenticate** (if needed):
 
@@ -95,6 +95,28 @@ Click **Test**.
 
 ---
 
+## BYOK providers
+
+Use your own API key instead of (or alongside) GitHub Copilot. Go to **Settings → Sidekick → Models** and pick a provider:
+
+| Provider                          | Type          | Default endpoint              |
+| --------------------------------- | ------------- | ----------------------------- |
+| **GitHub (built-in)**       | —            | Via Copilot CLI               |
+| **OpenAI**                  | `openai`    | `https://api.openai.com/v1` |
+| **Microsoft Foundry**       | `azure`     | Your Azure endpoint           |
+| **Anthropic**               | `anthropic` | `https://api.anthropic.com` |
+| **Ollama**                  | `openai`    | `http://localhost:11434/v1` |
+| **Microsoft Foundry Local** | `openai`    | Local Foundry model server    |
+| **Other OpenAI-compatible** | `openai`    | Any compatible endpoint       |
+
+Fill in **Base URL**, **Model name** (e.g. `gpt-5.4`, `claude-opus-4.6`, `llama3.2`), and either an **API key** or **Bearer token**. Choose the **Wire API** format (`Completions` or `Responses`). Click **Test**.
+
+The model name appears in both the chat and inline operations model dropdowns.
+
+> **Note:** Streaming is automatically disabled for **Microsoft Foundry Local**.
+
+---
+
 ## The Sidekick panel
 
 The panel lives in the right sidebar and has three tabs: **Chat**, **Triggers**, and **Search**.
@@ -105,25 +127,25 @@ A streaming AI conversation with full Markdown rendering. Type a message and pre
 
 **Toolbar:**
 
-| Control | What it does |
-|---------|-------------|
-| **+** | New conversation |
-| **↻** | Reload all config files |
-| **Agent** dropdown | Pick an agent — auto-selects its model, tools, and skills |
-| **Model** dropdown | Switch AI model |
-| **Reasoning** (brain icon) | Set reasoning effort (low / medium / high / xhigh) — appears when the selected model supports it |
-| **Skills** (wand icon) | Toggle skills on/off |
-| **Tools** (plug icon) | Toggle MCP servers on/off |
-| **Working dir** (drive icon) | Set the working directory for file operations |
-| **Debug** (bug icon) | Show tool calls, token usage, and timing |
+| Control                            | What it does                                                                                      |
+| ---------------------------------- | ------------------------------------------------------------------------------------------------- |
+| **+**                        | New conversation                                                                                  |
+| **↻**                       | Reload all config files                                                                           |
+| **Agent** dropdown           | Pick an agent — auto-selects its model, tools, and skills                                        |
+| **Model** dropdown           | Switch AI model                                                                                   |
+| **Reasoning** (brain icon)   | Set reasoning effort (low / medium / high / xhigh) — appears when the selected model supports it |
+| **Skills** (wand icon)       | Toggle skills on/off                                                                              |
+| **Tools** (plug icon)        | Toggle MCP servers on/off                                                                         |
+| **Working dir** (drive icon) | Set the working directory for file operations                                                     |
+| **Debug** (bug icon)         | Show tool calls, token usage, and timing                                                          |
 
 **Input bar:**
 
-| Button | What it does |
-|--------|-------------|
-| **Folder** | Set a vault scope — limit which files and folders the AI can see |
-| **Paperclip** | Attach files from your OS |
-| **Clipboard** | Paste clipboard text as an attachment |
+| Button              | What it does                                                      |
+| ------------------- | ----------------------------------------------------------------- |
+| **Folder**    | Set a vault scope — limit which files and folders the AI can see |
+| **Paperclip** | Attach files from your OS                                         |
+| **Clipboard** | Paste clipboard text as an attachment                             |
 
 The **active note** is automatically included as context. The working directory follows the active note's parent folder.
 
@@ -171,23 +193,23 @@ You are the **Grammar Assistant** — help users write clearly and correctly.
 
 ### Frontmatter fields
 
-| Field | Required | Description |
-|-------|----------|-------------|
-| `name` | Yes | Display name in the agent dropdown |
-| `description` | No | Short purpose description |
-| `model` | No | Preferred model (auto-selected when the agent is chosen) |
-| `tools` | No | Which MCP servers to enable (see below) |
-| `skills` | No | Which skills to enable (see below) |
+| Field           | Required | Description                                              |
+| --------------- | -------- | -------------------------------------------------------- |
+| `name`        | Yes      | Display name in the agent dropdown                       |
+| `description` | No       | Short purpose description                                |
+| `model`       | No       | Preferred model (auto-selected when the agent is chosen) |
+| `tools`       | No       | Which MCP servers to enable (see below)                  |
+| `skills`      | No       | Which skills to enable (see below)                       |
 
 The Markdown body is the agent's **system prompt**, sent as context with every message.
 
 ### How `tools` and `skills` work
 
-| Frontmatter | Effect |
-|-------------|--------|
-| Property **omitted** | All tools/skills **enabled** |
-| Property **present but empty** (`tools:`) | All tools/skills **disabled** |
-| Property **lists specific items** | Only those items enabled |
+| Frontmatter                                      | Effect                             |
+| ------------------------------------------------ | ---------------------------------- |
+| Property**omitted**                        | All tools/skills**enabled**  |
+| Property**present but empty** (`tools:`) | All tools/skills**disabled** |
+| Property**lists specific items**           | Only those items enabled           |
 
 This lets you create focused agents. A writing agent with `tools:` (empty) has no tool access. A general-purpose agent with no `tools` property gets everything.
 
@@ -301,12 +323,12 @@ Use **input variables** to avoid hardcoding API keys. Define an `"inputs"` array
 
 This follows the [VS Code MCP input variable](https://code.visualstudio.com/docs/copilot/reference/mcp-configuration#_input-variables-for-sensitive-data) format.
 
-| Property | Required | Description |
-|----------|----------|-------------|
-| `type` | Yes | Input prompt type (e.g. `"promptString"`) |
-| `id` | Yes | Unique ID referenced as `${input:id}` |
-| `description` | Yes | Prompt text shown to the user |
-| `password` | No | Mask input and store securely (`false` by default) |
+| Property        | Required | Description                                          |
+| --------------- | -------- | ---------------------------------------------------- |
+| `type`        | Yes      | Input prompt type (e.g.`"promptString"`)           |
+| `id`          | Yes      | Unique ID referenced as `${input:id}`              |
+| `description` | Yes      | Prompt text shown to the user                        |
+| `password`    | No       | Mask input and store securely (`false` by default) |
 
 Sidekick prompts for missing values at load time. Manage stored values in **Settings → Sidekick → MCP input variables**. Password values are kept in Obsidian's local storage and never written to `data.json`.
 
@@ -372,7 +394,7 @@ Add the servers to your `sidekick/tools/mcp.json`:
 		"description": "Microsoft To Do Client Secret",
 		"password": true
 		}
-	]	
+	]
 }
 ```
 
@@ -468,10 +490,10 @@ Translate the provided text from English to Portuguese.
 2. Filter and select a prompt with arrow keys + **Enter** or **Tab**.
 3. The prompt content is prepended to your message. If it specifies an `agent`, that agent is auto-selected.
 
-| Frontmatter | Required | Description |
-|-------------|----------|-------------|
-| `agent` | No | Auto-select this agent |
-| `description` | No | Shown in the dropdown for context |
+| Frontmatter     | Required | Description                       |
+| --------------- | -------- | --------------------------------- |
+| `agent`       | No       | Auto-select this agent            |
+| `description` | No       | Shown in the dropdown for context |
 
 ---
 
@@ -492,14 +514,14 @@ enabled: true
 Help me prepare my day — surface asks, recommend actions, and prioritize.
 ```
 
-| Field | Required | Description |
-|-------|----------|-------------|
-| `name` | No | Display name (defaults to filename) |
-| `description` | No | Short purpose description |
-| `agent` | No | Agent to use (its model and system prompt apply) |
-| `cron` | No | Cron expression (min, hour, dom, month, dow). Checked every 60 s. |
-| `glob` | No | Glob pattern matching vault paths — fires on file create/modify/rename |
-| `enabled` | No | Active by default (`true`) |
+| Field           | Required | Description                                                             |
+| --------------- | -------- | ----------------------------------------------------------------------- |
+| `name`        | No       | Display name (defaults to filename)                                     |
+| `description` | No       | Short purpose description                                               |
+| `agent`       | No       | Agent to use (its model and system prompt apply)                        |
+| `cron`        | No       | Cron expression (min, hour, dom, month, dow). Checked every 60 s.       |
+| `glob`        | No       | Glob pattern matching vault paths — fires on file create/modify/rename |
+| `enabled`     | No       | Active by default (`true`)                                            |
 
 A `cron` and/or `glob` must be configured. Trigger sessions appear in the sidebar tagged with `[trigger]`. File-change triggers include the changed file path as context.
 
@@ -565,32 +587,32 @@ Right-click in any note → **Sidekick** to access inline AI actions. The menu a
 
 #### With text selected
 
-| Action | What happens |
-|--------|-------------|
-| **Edit** | Opens the [Edit modal](#edit-modal) with tone, format, and length controls |
-| **Rewrite** | Improves clarity and readability |
-| **Proofread** | Fixes grammar, spelling, and punctuation |
-| **Use synonyms** | Swaps words for variety |
-| **Minor revise** | Polishes without changing meaning |
-| **Major revise** | Significantly reworks structure and flow |
-| **Describe** | Explains what the text conveys |
-| **Answer** | Responds to a question in the text |
-| **Explain** | Breaks down in simple terms |
-| **Expand** | Adds detail and depth |
-| **Summarize** | Creates a concise summary |
-| **Chat with sidekick** | Opens chat with the selection as context |
-| **Autocomplete** | Toggle ghost-text autocomplete |
+| Action                       | What happens                                                           |
+| ---------------------------- | ---------------------------------------------------------------------- |
+| **Edit**               | Opens the[Edit modal](#edit-modal) with tone, format, and length controls |
+| **Rewrite**            | Improves clarity and readability                                       |
+| **Proofread**          | Fixes grammar, spelling, and punctuation                               |
+| **Use synonyms**       | Swaps words for variety                                                |
+| **Minor revise**       | Polishes without changing meaning                                      |
+| **Major revise**       | Significantly reworks structure and flow                               |
+| **Describe**           | Explains what the text conveys                                         |
+| **Answer**             | Responds to a question in the text                                     |
+| **Explain**            | Breaks down in simple terms                                            |
+| **Expand**             | Adds detail and depth                                                  |
+| **Summarize**          | Creates a concise summary                                              |
+| **Chat with sidekick** | Opens chat with the selection as context                               |
+| **Autocomplete**       | Toggle ghost-text autocomplete                                         |
 
 Quick actions **replace the selected text** in-place using the **Inline operations model**.
 
 #### Without a selection
 
-| Action | What happens |
-|--------|-------------|
-| **Edit the note** | Opens the Edit modal for the whole note |
+| Action                         | What happens                              |
+| ------------------------------ | ----------------------------------------- |
+| **Edit the note**        | Opens the Edit modal for the whole note   |
 | **Structure and refine** | Restructures and improves the entire note |
-| **Chat with sidekick** | Opens the chat panel |
-| **Autocomplete** | Toggle ghost-text autocomplete |
+| **Chat with sidekick**   | Opens the chat panel                      |
+| **Autocomplete**         | Toggle ghost-text autocomplete            |
 
 ---
 
@@ -610,14 +632,14 @@ Right-click a file or folder in the vault explorer → **Sidekick**.
 
 A dedicated modal for fine-grained text transformation. Open it via **Edit** in the context menu.
 
-| Control | Options |
-|---------|---------|
-| **Task** | Rewrite, Proofread, Use synonyms, Minor revise, Major revise, etc. |
-| **Tone** | Professional, Casual, Enthusiastic, Informational, Confident, Technical, Funny |
-| **Format** | Single paragraph, List, Table, Headings, Code blocks, JSON, and more |
-| **Length** | Slider — shorter to longer |
-| **Choices** | How many alternatives to generate |
-| **Edit prompt** | Free-text instruction to guide the transformation |
+| Control               | Options                                                                        |
+| --------------------- | ------------------------------------------------------------------------------ |
+| **Task**        | Rewrite, Proofread, Use synonyms, Minor revise, Major revise, etc.             |
+| **Tone**        | Professional, Casual, Enthusiastic, Informational, Confident, Technical, Funny |
+| **Format**      | Single paragraph, List, Table, Headings, Code blocks, JSON, and more           |
+| **Length**      | Slider — shorter to longer                                                    |
+| **Choices**     | How many alternatives to generate                                              |
+| **Edit prompt** | Free-text instruction to guide the transformation                              |
 
 Each control can be toggled on/off individually. Preview alternatives and pick the one you want.
 
@@ -647,36 +669,36 @@ Limit what the AI can see. Click the **folder** icon in the chat input bar to op
 
 ### GitHub Copilot Client
 
-| Setting | Default | Description |
-|---------|---------|-------------|
-| **Type** | Local CLI | `Local CLI` or `Remote CLI` |
-| **Path** | *(empty)* | Copilot CLI binary path. Blank = use `PATH`. |
-| **URL** | *(empty)* | CLI server URL (Remote mode) |
-| **Use Logged-in User** | On | Use OS-level GitHub auth (Local mode) |
-| **GitHub Token** | *(empty)* | PAT for manual auth |
+| Setting                      | Default     | Description                                    |
+| ---------------------------- | ----------- | ---------------------------------------------- |
+| **Type**               | Local CLI   | `Local CLI` or `Remote CLI`                |
+| **Path**               | *(empty)* | Copilot CLI binary path. Blank = use `PATH`. |
+| **URL**                | *(empty)* | CLI server URL (Remote mode)                   |
+| **Use Logged-in User** | On          | Use OS-level GitHub auth (Local mode)          |
+| **GitHub Token**       | *(empty)* | PAT for manual auth                            |
 
 ### Models
 
-| Setting | Default | Description |
-|---------|---------|-------------|
-| **Provider** | GitHub (built-in) | GitHub, OpenAI, Microsoft Foundry, Anthropic, Ollama, Foundry Local, or Other |
-| **Base URL** | *(per provider)* | API endpoint |
-| **Model name** | *(empty)* | Model ID (e.g. `gpt-4o`, `claude-sonnet-4`) |
-| **API key** | *(empty)* | `x-api-key` header |
-| **Bearer token** | *(empty)* | `Authorization` header |
-| **Wire API** | Completions | `Completions` or `Responses` |
+| Setting                | Default            | Description                                                                   |
+| ---------------------- | ------------------ | ----------------------------------------------------------------------------- |
+| **Provider**     | GitHub (built-in)  | GitHub, OpenAI, Microsoft Foundry, Anthropic, Ollama, Foundry Local, or Other |
+| **Base URL**     | *(per provider)* | API endpoint                                                                  |
+| **Model name**   | *(empty)*        | Model ID (e.g.`gpt-4o`, `claude-sonnet-4`)                                |
+| **API key**      | *(empty)*        | `x-api-key` header                                                          |
+| **Bearer token** | *(empty)*        | `Authorization` header                                                      |
+| **Wire API**     | Completions        | `Completions` or `Responses`                                              |
 
 ### Sidekick settings
 
-| Setting | Default | Description |
-|---------|---------|-------------|
-| **Inline operations model** | Default | Model for context-menu actions and autocomplete |
-| **Sidekick folder** | `sidekick` | Root folder for agents, skills, tools, prompts, triggers |
-| **Tools approval** | Ask | `Allow` (auto) or `Ask` (confirm each call) |
-| **Ghost-text autocomplete** | Off | Inline AI suggestions in the editor |
-| **Reasoning effort** | *(unset)* | Low / Medium / High / XHigh — when supported by the model |
-| **Search mode** | Basic | `Basic` (quick) or `Advanced` (full agent/model/skills/tools config) |
-| **Search agent** | *(empty)* | Default agent for the Search tab |
+| Setting                           | Default      | Description                                                              |
+| --------------------------------- | ------------ | ------------------------------------------------------------------------ |
+| **Inline operations model** | Default      | Model for context-menu actions and autocomplete                          |
+| **Sidekick folder**         | `sidekick` | Root folder for agents, skills, tools, prompts, triggers                 |
+| **Tools approval**          | Ask          | `Allow` (auto) or `Ask` (confirm each call)                          |
+| **Ghost-text autocomplete** | Off          | Inline AI suggestions in the editor                                      |
+| **Reasoning effort**        | *(unset)*  | Low / Medium / High / XHigh — when supported by the model               |
+| **Search mode**             | Basic        | `Basic` (quick) or `Advanced` (full agent/model/skills/tools config) |
+| **Search agent**            | *(empty)*  | Default agent for the Search tab                                         |
 
 ### Bots
 

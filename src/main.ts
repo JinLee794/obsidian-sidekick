@@ -1,6 +1,6 @@
 import {Plugin} from 'obsidian';
 import {DEFAULT_SETTINGS, SidekickSettings, SidekickSettingTab, SECURE_FIELDS, loadSecureField, saveSecureField} from "./settings";
-import {CopilotService} from "./copilot";
+import {CopilotService, resolveGhToken} from "./copilot";
 import {SidekickView, SIDEKICK_VIEW_TYPE} from "./sidekickView";
 import {registerEditorMenu, registerFileMenu} from './editor/editorMenu';
 import {buildGhostTextExtension} from './editor/ghostText';
@@ -62,10 +62,22 @@ export default class SidekickPlugin extends Plugin {
 			});
 		} else {
 			const loc = s.copilotLocation.trim();
+			let token = !s.useLoggedInUser && s.githubToken ? s.githubToken : undefined;
+			// When useLoggedInUser is true but no explicit token is set,
+			// try to obtain a gh CLI token as a fallback. This helps when
+			// the Copilot CLI subprocess (spawned from Electron) can't access
+			// keychain-stored credentials or find `gh` in its limited PATH.
+			if (s.useLoggedInUser && !token) {
+				try {
+					token = await resolveGhToken();
+				} catch {
+					// Not critical — the SDK will still attempt auto-login
+				}
+			}
 			this.copilot = new CopilotService({
 				cliPath: loc.length > 0 ? loc : undefined,
-				useLoggedInUser: s.useLoggedInUser,
-				githubToken: !s.useLoggedInUser && s.githubToken ? s.githubToken : undefined,
+				useLoggedInUser: s.useLoggedInUser && !token,
+				githubToken: token,
 			});
 		}
 	}

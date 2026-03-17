@@ -23,8 +23,9 @@ import {
 	gutter,
 	GutterMarker,
 } from '@codemirror/view';
-import {setIcon, Menu, Notice} from 'obsidian';
-import type SidekickPlugin from '../main';
+import {setIcon, Menu, Notice, TFile} from 'obsidian';
+import type {HeadingCache} from 'obsidian';
+import type SidekickPlugin from './main';
 import {buildSidekickMenu} from './editorMenu';
 
 /* ── Constants ───────────────────────────────────────────────── */
@@ -39,7 +40,14 @@ const MIN_LINE_CHARS = 3;
 const CONTEXT_LINES = 30;
 
 /** Maximum characters to send as context to the model. */
-const MAX_CONTEXT_CHARS = 2000;
+const MAX_CONTEXT_CHARS = 3000;
+
+/** Character budget split: 60% before cursor, 40% after. */
+const BEFORE_RATIO = 0.6;
+const AFTER_RATIO = 0.4;
+
+/** Character budget reserved for the context header. */
+const HEADER_BUDGET = 200;
 
 /** System prompt sent once when the completion session is created. */
 const SYSTEM_MESSAGE =
@@ -263,9 +271,100 @@ function computeInsertPrefix(state: EditorState, pos: number, ghostText: string)
 	return '';
 }
 
+/* ── Structure-aware truncation ───────────────────────────────── */
+
+/**
+ * Truncate text at a clean boundary (paragraph, heading, sentence, or word)
+ * instead of slicing mid-word.
+ */
+function truncateAtBoundary(text: string, maxChars: number, direction: 'before' | 'after'): string {
+	if (text.length <= maxChars) return text;
+
+	if (direction === 'before') {
+		const cut = text.slice(-maxChars);
+		const breaks = [
+			cut.indexOf('\n\n'),
+			cut.indexOf('\n#'),
+			cut.search(/\.\s/),
+			cut.indexOf(' '),
+		];
+		const breakIdx = breaks.find(i => i > 0 && i < maxChars / 4);
+		return breakIdx !== undefined ? cut.slice(breakIdx) : cut;
+	} else {
+		const cut = text.slice(0, maxChars);
+		const breaks = [
+			cut.lastIndexOf('\n\n'),
+			cut.lastIndexOf('\n#'),
+			cut.search(/\.\s[^.]*$/),
+			cut.lastIndexOf(' '),
+		];
+		const breakIdx = breaks.find(i => i > maxChars * 3 / 4);
+		return breakIdx !== undefined ? cut.slice(0, breakIdx) : cut;
+	}
+}
+
+/* ── Context header (file identity + heading path) ───────────── */
+
+function buildHeadingPath(headings: HeadingCache[], cursorLine: number): string {
+	const stack: string[] = [];
+	for (const h of headings) {
+		if (h.position.start.line >= cursorLine) break;
+		while (stack.length >= h.level) stack.pop();
+		stack.push(h.heading);
+	}
+	return stack.join(' > ');
+}
+
+function buildContextHeader(state: EditorState, plugin: SidekickPlugin): string {
+	const file = plugin.app.workspace.getActiveFile();
+	if (!file) return '';
+
+	const cache = plugin.app.metadataCache.getFileCache(file);
+	if (!cache) return '';
+
+	const parts: string[] = [];
+
+	parts.push(`File: ${file.path}`);
+
+	if (cache.frontmatter) {
+		const tags = cache.frontmatter.tags;
+		const type = cache.frontmatter.type;
+		if (tags) parts.push(`Tags: ${Array.isArray(tags) ? tags.join(', ') : tags}`);
+		if (type) parts.push(`Type: ${type}`);
+	}
+
+	if (cache.headings?.length) {
+		const cursorLine = state.doc.lineAt(state.selection.main.head).number;
+		const headingPath = buildHeadingPath(cache.headings, cursorLine);
+		if (headingPath) parts.push(`Section: ${headingPath}`);
+	}
+
+	// Linked-file summaries (P4: ghost-text context)
+	const resolved = plugin.app.metadataCache.resolvedLinks;
+	const outgoing = resolved[file.path];
+	if (outgoing) {
+		const linkedNames = Object.keys(outgoing).slice(0, 3).map(path => {
+			const f = plugin.app.vault.getAbstractFileByPath(path);
+			if (!(f instanceof TFile)) return null;
+			const lCache = plugin.app.metadataCache.getFileCache(f);
+			const lTags = lCache?.frontmatter?.tags;
+			const tagStr = lTags
+				? ` (${(Array.isArray(lTags) ? lTags : [lTags]).slice(0, 3).join(', ')})`
+				: '';
+			return f.basename + tagStr;
+		}).filter(Boolean);
+		if (linkedNames.length > 0) {
+			parts.push(`Linked: ${linkedNames.join('; ')}`);
+		}
+	}
+
+	const header = parts.length > 0 ? `[${parts.join(' | ')}]\n` : '';
+	return header.length > HEADER_BUDGET ? header.slice(0, HEADER_BUDGET) : header;
+}
+
 /* ── Prompt builder ──────────────────────────────────────────── */
 
-function buildPrompt(state: EditorState): string {
+function buildPrompt(state: EditorState, plugin: SidekickPlugin): string {
 	const cursor = state.selection.main.head;
 	const doc = state.doc;
 	const cursorLine = doc.lineAt(cursor);
@@ -277,7 +376,6 @@ function buildPrompt(state: EditorState): string {
 	for (let i = startLine; i <= cursorLine.number; i++) {
 		const line = doc.line(i);
 		if (i === cursorLine.number) {
-			// Only include text up to the cursor position
 			before += line.text.slice(0, cursor - line.from);
 		} else {
 			before += line.text + '\n';
@@ -292,16 +390,18 @@ function buildPrompt(state: EditorState): string {
 		after += '\n' + doc.line(i).text;
 	}
 
-	// Trim to fit within context limit
-	if (before.length + after.length > MAX_CONTEXT_CHARS) {
-		const half = Math.floor(MAX_CONTEXT_CHARS / 2);
-		before = before.slice(-half);
-		after = after.slice(0, half);
-	}
+	const header = buildContextHeader(state, plugin);
+	const contentBudget = MAX_CONTEXT_CHARS - header.length;
+	const beforeBudget = Math.floor(contentBudget * BEFORE_RATIO);
+	const afterBudget = Math.floor(contentBudget * AFTER_RATIO);
+
+	before = truncateAtBoundary(before, beforeBudget, 'before');
+	after = truncateAtBoundary(after, afterBudget, 'after');
 
 	return (
 		'Continue the following text from exactly where it stops. ' +
 		'Return ONLY the continuation text, no explanation, no markdown fences, no repeating existing text.\n\n' +
+		header +
 		'TEXT BEFORE CURSOR:\n' +
 		before +
 		'\n<<<CURSOR>>>\n' +
@@ -393,7 +493,7 @@ export function buildGhostTextExtension(plugin: SidekickPlugin): Extension {
 		view.dispatch({effects: setFetching.of(true)});
 
 		try {
-			const prompt = buildPrompt(view.state);
+			const prompt = buildPrompt(view.state, plugin);
 			const model = plugin.settings.inlineModel || undefined;
 
 			const result = await plugin.copilot!.chat({

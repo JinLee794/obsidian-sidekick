@@ -54,6 +54,10 @@ export interface SidekickSettings {
 	searchAgent: string;
 	/** Search mode: 'basic' reuses session with minimal config, 'advanced' allows full agent/model/skills/tools. */
 	searchMode: 'basic' | 'advanced';
+	/** Context behavior: suggest explicit chips or auto-attach/eager context. */
+	contextMode: 'suggest' | 'auto';
+	/** Auto-route requests to the best-fit agent when agent is set to Auto. */
+	agentTriage: boolean;
 
 	/** Telegram Bot ID (informational, not secret). */
 	telegramBotId: string;
@@ -111,10 +115,8 @@ export const DEFAULT_SETTINGS: SidekickSettings = {
 	reasoningEffort: '',
 	searchAgent: '',
 	searchMode: 'basic',
-	telegramBotId: '',
-	telegramBotToken: '',
-	telegramAllowedUsers: '',
-	telegramDefaultAgent: '',
+	contextMode: 'suggest',
+	agentTriage: true,
 }
 
 /** Fields stored in vault-specific local storage instead of data.json. */
@@ -674,6 +676,27 @@ export class SidekickSettingTab extends PluginSettingTab {
 				.setValue(this.plugin.settings.autocompleteEnabled)
 				.onChange(async (value) => {
 					this.plugin.settings.autocompleteEnabled = value;
+					await this.plugin.saveSettings();
+				}));
+
+		new Setting(capPanel)
+			.setName('Context mode')
+			.setDesc('Suggest: explicit context chips only and tool-first reads. Auto: include active context and eager context building.')
+			.addDropdown(dropdown => dropdown
+				.addOptions({suggest: 'Suggest (recommended)', auto: 'Auto (legacy behavior)'})
+				.setValue(this.plugin.settings.contextMode)
+				.onChange(async (value) => {
+					this.plugin.settings.contextMode = value as 'suggest' | 'auto';
+					await this.plugin.saveSettings();
+				}));
+
+		new Setting(capPanel)
+			.setName('Automatic agent triage')
+			.setDesc('When agent is set to Auto, route requests to the best-fit configured agent.')
+			.addToggle(toggle => toggle
+				.setValue(this.plugin.settings.agentTriage)
+				.onChange(async (value) => {
+					this.plugin.settings.agentTriage = value;
 					await this.plugin.saveSettings();
 				}));
 

@@ -1,5 +1,14 @@
 # Obsidian community plugin
 
+## Agent efficiency rules
+
+- **Search before reading**: Use grep/regex search to find relevant code instead of reading files sequentially. Never read more than 3 files without a targeted search first.
+- **Use the codebase map**: Check repository memory (`/memories/repo/codebase-map.md`) before exploring the file tree. It maps every source file to its purpose.
+- **Prefer search subagents**: For any exploration that might require reading multiple files, delegate to a search/explore subagent rather than doing individual reads in the main conversation.
+- **Batch reads**: When you must read files, read large ranges (50-100+ lines) in parallel rather than many small sequential reads.
+- **Don't glob recursively**: This is a small plugin (~15 source files in `src/`). Don't glob `**/*` — use the codebase map to go directly to the right file.
+- **Skip re-reading unchanged files**: If a file was read earlier in this conversation, don't read it again unless it was edited.
+
 ## Project overview
 
 - Target: Obsidian Community Plugin (TypeScript → bundled JavaScript).

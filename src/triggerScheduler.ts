@@ -1,5 +1,6 @@
 import type {TriggerConfig} from './types';
 import {debugTrace} from './debug';
+import {App, TFile} from 'obsidian';
 
 /**
  * Minimal 5-field cron expression matcher.
@@ -99,6 +100,10 @@ export function globToRegex(glob: string): RegExp {
 export interface TriggerFireContext {
 	/** Vault-relative path of the file that changed (for onFileChange triggers). */
 	filePath?: string;
+	/** Content of the file at the time the trigger fired. */
+	currentContent?: string;
+	/** Previous content (if available from snapshot cache). */
+	previousContent?: string;
 }
 
 /** Callbacks for the trigger scheduler. */
@@ -120,6 +125,11 @@ export class TriggerScheduler {
 	/** Cached compiled glob regexes, keyed by glob pattern. Invalidated on setTriggers(). */
 	private globCache = new Map<string, RegExp>();
 
+	/** path → last-known content + timestamp (for diff computation). */
+	private contentSnapshots = new Map<string, {hash: number; content: string; timestamp: number}>();
+	private static readonly MAX_SNAPSHOTS = 200;
+	private static readonly SNAPSHOT_TTL = 30 * 60 * 1000; // 30 minutes
+
 	constructor(callbacks: TriggerSchedulerCallbacks) {
 		this.callbacks = callbacks;
 	}
@@ -128,6 +138,14 @@ export class TriggerScheduler {
 	setTriggers(triggers: TriggerConfig[]): void {
 		this.triggers = triggers.filter(t => t.enabled);
 		this.globCache.clear();
+		const globCount = this.triggers.filter(t => t.glob).length;
+		const cronCount = this.triggers.filter(t => t.cron).length;
+		debugTrace(`Sidekick: setTriggers — ${this.triggers.length} enabled (${globCount} glob, ${cronCount} cron)`);
+		if (this.triggers.length > 0) {
+			for (const t of this.triggers) {
+				debugTrace(`Sidekick:   trigger "${t.name}" glob=${t.glob ?? '—'} cron=${t.cron ?? '—'}`);
+			}
+		}
 	}
 
 	/** Get or compile a glob regex, caching the result. */
@@ -160,6 +178,7 @@ export class TriggerScheduler {
 			window.clearInterval(this.intervalId);
 			this.intervalId = null;
 		}
+		this.contentSnapshots.clear();
 	}
 
 	/** Poll all cron triggers and fire any that match the current minute. */
@@ -183,14 +202,19 @@ export class TriggerScheduler {
 	/**
 	 * Check if a file event matches any onFileChange triggers.
 	 * Uses a 5-second per-trigger cooldown to debounce rapid changes.
+	 * Reads file content to provide diff context.
 	 */
-	checkFileChangeTriggers(filePath: string): void {
+	async checkFileChangeTriggers(filePath: string, app: App): Promise<void> {
 		const now = Date.now();
 		if (this.triggers.length === 0) {
-			debugTrace('Sidekick: checkFileChangeTriggers — no triggers loaded');
+			debugTrace('Sidekick: checkFileChangeTriggers — no triggers loaded (check that trigger files exist in the triggers folder and have enabled: true)');
 			return;
 		}
 		const globTriggers = this.triggers.filter(t => t.glob);
+		if (globTriggers.length === 0) {
+			debugTrace(`Sidekick: checkFileChangeTriggers("${filePath}") — ${this.triggers.length} trigger(s) loaded but none have a glob pattern`);
+			return;
+		}
 		debugTrace(`Sidekick: checkFileChangeTriggers("${filePath}") — ${this.triggers.length} trigger(s), ${globTriggers.length} with glob`);
 		for (const trigger of globTriggers) {
 			const regex = this.getGlobRegex(trigger.glob!);
@@ -202,10 +226,63 @@ export class TriggerScheduler {
 				const elapsed = now - lastFired;
 				if (elapsed > 5_000) {
 					this.callbacks.setLastFired(key, now);
-					this.callbacks.onTriggerFire(trigger, {filePath});
+
+					// Read current file content for diff context
+					let currentContent: string | undefined;
+					const file = app.vault.getAbstractFileByPath(filePath);
+					if (file instanceof TFile) {
+						try {
+							currentContent = await app.vault.cachedRead(file);
+						} catch { /* ignore read errors */ }
+					}
+
+					// Look up previous snapshot
+					const snapshot = this.contentSnapshots.get(filePath);
+					const previousContent = snapshot?.content;
+
+					// Update snapshot
+					if (currentContent !== undefined) {
+						this.updateSnapshot(filePath, currentContent);
+					}
+
+					this.callbacks.onTriggerFire(trigger, {
+						filePath,
+						currentContent,
+						previousContent,
+					});
 				} else {
 					debugTrace(`Sidekick: trigger "${trigger.name}" skipped — cooldown (${Math.round(elapsed / 1000)}s / 5s)`);
 				}
+			}
+		}
+	}
+
+	private updateSnapshot(filePath: string, content: string): void {
+		let hash = 0;
+		for (let i = 0; i < content.length; i++) {
+			hash = ((hash << 5) - hash + content.charCodeAt(i)) | 0;
+		}
+		this.contentSnapshots.set(filePath, {hash, content, timestamp: Date.now()});
+
+		if (this.contentSnapshots.size > TriggerScheduler.MAX_SNAPSHOTS) {
+			this.evictOldSnapshots();
+		}
+	}
+
+	private evictOldSnapshots(): void {
+		const cutoff = Date.now() - TriggerScheduler.SNAPSHOT_TTL;
+		for (const [path, snap] of this.contentSnapshots) {
+			if (snap.timestamp < cutoff) {
+				this.contentSnapshots.delete(path);
+			}
+		}
+
+		if (this.contentSnapshots.size > TriggerScheduler.MAX_SNAPSHOTS) {
+			const sorted = [...this.contentSnapshots.entries()]
+				.sort((a, b) => a[1].timestamp - b[1].timestamp);
+			const excess = sorted.length - TriggerScheduler.MAX_SNAPSHOTS;
+			for (let i = 0; i < excess; i++) {
+				this.contentSnapshots.delete(sorted[i]![0]);
 			}
 		}
 	}

@@ -31,6 +31,32 @@ declare const process: {
 };
 
 /**
+ * Try to obtain a GitHub token from `gh auth token`.
+ * Returns the token string, or undefined if `gh` is not available
+ * or the user is not logged in.
+ */
+export async function resolveGhToken(): Promise<string | undefined> {
+	const {execFile} = nodeRequire?.('node:child_process') as typeof import('node:child_process') ?? await import('node:child_process');
+	const {promisify} = nodeRequire?.('node:util') as typeof import('node:util') ?? await import('node:util');
+	const home = process.env['HOME'] || '';
+	// Build a PATH that includes common binary directories
+	const extraDirs = ['/usr/local/bin', '/opt/homebrew/bin'];
+	if (home) extraDirs.push(`${home}/.local/bin`);
+	const searchPath = [...extraDirs, process.env['PATH'] || ''].join(':');
+	const execFileAsync = promisify(execFile);
+	try {
+		const {stdout} = await execFileAsync('gh', ['auth', 'token'], {
+			timeout: 5000,
+			env: {...process.env, PATH: searchPath},
+		});
+		const token = stdout.trim();
+		return token.length > 0 ? token : undefined;
+	} catch {
+		return undefined;
+	}
+}
+
+/**
  * Resolve the platform-specific Copilot native binary from node_modules.
  * Falls back to the JS entry point if the native binary is not found.
  */
@@ -54,6 +80,10 @@ async function resolveDefaultCliPath(): Promise<string> {
  * Build a clean environment for the Copilot CLI subprocess.
  * Uses an allowlist of safe, well-known environment variables
  * to avoid leaking sensitive or Electron-specific values.
+ *
+ * On macOS/Linux, augments PATH with common binary directories that
+ * Electron apps launched from Finder don't inherit from the shell.
+ * This ensures the Copilot CLI can find tools like `gh` for authentication.
  */
 function cleanEnv(): Record<string, string> {
 	const ALLOWED_PREFIXES = [
@@ -76,6 +106,28 @@ function cleanEnv(): Record<string, string> {
 			env[key] = value;
 		}
 	}
+
+	// Electron apps launched from Finder on macOS inherit a minimal PATH
+	// (e.g. /usr/bin:/bin:/usr/sbin:/sbin). Augment it so the Copilot CLI
+	// subprocess can find `gh` and other tools needed for authentication.
+	if (process.platform !== 'win32') {
+		const home = env['HOME'] || '';
+		const extraDirs = [
+			'/usr/local/bin',
+			'/opt/homebrew/bin',
+			'/opt/homebrew/sbin',
+			home ? `${home}/.local/bin` : '',
+			home ? `${home}/.nvm/current/bin` : '',
+			'/usr/local/sbin',
+		].filter(Boolean);
+		const currentPath = env['PATH'] || '';
+		const existingDirs = new Set(currentPath.split(':'));
+		const missing = extraDirs.filter(d => !existingDirs.has(d));
+		if (missing.length > 0) {
+			env['PATH'] = [...missing, currentPath].join(':');
+		}
+	}
+
 	return env;
 }
 

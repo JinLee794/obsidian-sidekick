@@ -3,7 +3,12 @@ export interface AgentConfig {
 	name: string;
 	description: string;
 	model?: string;
-	/** List of MCP tool server names to enable. Empty/undefined = all. */
+	/**
+	 * List of MCP server names and/or agent names to enable.
+	 * Entries matching another agent's name are treated as sub-agent references;
+	 * all other entries are treated as MCP server names.
+	 * Empty array = no tools, undefined = all.
+	 */
 	tools?: string[];
 	/** List of skill names to enable. Empty/undefined = all. */
 	skills?: string[];
@@ -70,6 +75,23 @@ export interface ChatAttachment {
 		endLine: number;
 		endChar: number;
 	};
+}
+
+/** Suggested context item that can be explicitly accepted into attachments. */
+export interface ContextSuggestion {
+	type: 'file' | 'selection';
+	path: string;
+	name: string;
+	/** Selection-specific text (undefined for file suggestions). */
+	content?: string;
+	selection?: {
+		startLine: number;
+		startChar: number;
+		endLine: number;
+		endChar: number;
+	};
+	/** User dismissed this suggestion until the next context change. */
+	dismissed: boolean;
 }
 
 /** Selection info passed when "Chat with sidekick" is invoked on selected text. */
