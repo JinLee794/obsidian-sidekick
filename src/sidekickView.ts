@@ -26,8 +26,7 @@ import {TriggerScheduler} from './triggerScheduler';
 import type {TriggerFireContext} from './triggerScheduler';
 import {VaultIndex} from './vaultIndex';
 import {ContextBuilder} from './contextBuilder';
-import {VaultScopeModal} from './vaultScopeModal';
-import {EditModal} from './editModal';
+import {VaultScopeModal, EditModal} from './modals';
 import {NewTriggerModal} from './triggerModal';
 import {debugTrace, setDebugEnabled} from './debug';
 
@@ -5625,12 +5624,6 @@ export class SidekickView extends ItemView {
 	}
 
 	// ── Utilities ────────────────────────────────────────────────
-
-	/** Disable config controls that cannot be changed mid-session. */
-	updateToolbarLock(): void {
-		// No-op: all config changes set configDirty = true, which triggers
-		// a new session on the next send. No need to lock controls.
-	}
 
 	getWorkingDirectory(): string {
 		const base = this.getVaultBasePath();

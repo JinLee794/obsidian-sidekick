@@ -22,5 +22,5 @@ data.json
 .DS_Store
 
 # Local deploy script
-# deploy-local.sh
+# deploy-local.mjs
 .deploy-local.conf
