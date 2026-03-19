@@ -1,4 +1,4 @@
-import {Plugin} from 'obsidian';
+import {Plugin, FileSystemAdapter} from 'obsidian';
 import {DEFAULT_SETTINGS, SidekickSettings, SidekickSettingTab, SECURE_FIELDS, loadSecureField, saveSecureField} from "./settings";
 import {CopilotService, resolveGhToken} from "./copilot";
 import {SidekickView, SIDEKICK_VIEW_TYPE} from "./sidekickView";
@@ -74,8 +74,14 @@ export default class SidekickPlugin extends Plugin {
 					// Not critical — the SDK will still attempt auto-login
 				}
 			}
+			// Compute the actual plugin directory so the binary resolver avoids
+			// __dirname, which points to Electron's renderer inside electron.asar.
+			const pluginDir = this.app.vault.adapter instanceof FileSystemAdapter
+				? `${this.app.vault.adapter.getBasePath()}/${this.manifest.dir}`
+				: '';
 			this.copilot = new CopilotService({
 				cliPath: loc.length > 0 ? loc : undefined,
+				pluginDir,
 				useLoggedInUser: s.useLoggedInUser && !token,
 				githubToken: token,
 			});

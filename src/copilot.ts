@@ -57,23 +57,43 @@ export async function resolveGhToken(): Promise<string | undefined> {
 }
 
 /**
- * Resolve the platform-specific Copilot native binary from node_modules.
- * Falls back to the JS entry point if the native binary is not found.
+ * Resolve the platform-specific Copilot native binary.
+ *
+ * Search order:
+ *   1. `<pluginDir>/copilot[.exe]`  — flat copy deployed alongside main.js
+ *   2. `<pluginDir>/node_modules/@github/copilot-<platform>-<arch>/copilot[.exe]` — dev checkout
+ *
+ * `pluginDir` must be the absolute path of the plugin folder on disk
+ * (obtained from the Obsidian Plugin instance — NOT from __dirname, which
+ * resolves to Electron's renderer directory inside electron.asar).
+ *
+ * Returns an empty string when neither is found so the caller will omit
+ * cliPath and let the SDK discover the binary from PATH.
  */
-async function resolveDefaultCliPath(): Promise<string> {
+async function resolveDefaultCliPath(pluginDir: string): Promise<string> {
+	if (!pluginDir) return '';
 	// Lazy-load Node.js builtins so the module can be imported on mobile
 	const path = nodeRequire?.('node:path') as typeof import('node:path') ?? await import('node:path');
 	const fs = nodeRequire?.('node:fs/promises') as typeof import('node:fs/promises') ?? await import('node:fs/promises');
-	const nativePkg = `@github/copilot-${process.platform}-${process.arch}`;
 	const ext = process.platform === 'win32' ? '.exe' : '';
-	const nativeBin = path.join(__dirname, 'node_modules', nativePkg, `copilot${ext}`);
+
+	// 1. Flat copy next to main.js (deployed plugin)
+	const flatBin = path.join(pluginDir, `copilot${ext}`);
+	try {
+		await fs.access(flatBin);
+		return flatBin;
+	} catch { /* not found */ }
+
+	// 2. node_modules structure (dev checkout)
+	const nativePkg = `@github/copilot-${process.platform}-${process.arch}`;
+	const nativeBin = path.join(pluginDir, 'node_modules', nativePkg, `copilot${ext}`);
 	try {
 		await fs.access(nativeBin);
 		return nativeBin;
-	} catch {
-		// Fallback to the JS CLI entry point
-		return path.join(__dirname, 'node_modules', '@github', 'copilot', 'index.js');
-	}
+	} catch { /* not found */ }
+
+	// Not bundled — caller will omit cliPath so the SDK uses PATH.
+	return '';
 }
 
 /**
@@ -138,17 +158,21 @@ function cleanEnv(): Record<string, string> {
 export class CopilotService {
 	private client: CopilotClient | null = null;
 	private readonly cliPath: string | undefined;
+	private readonly pluginDir: string;
 	private readonly cliUrl: string | undefined;
 	private readonly githubToken: string | undefined;
 	private readonly useLoggedInUser: boolean | undefined;
 
 	constructor(opts?: {
 		cliPath?: string;
+		/** Absolute path of the plugin folder on disk (from Plugin.manifest + vault adapter). */
+		pluginDir?: string;
 		cliUrl?: string;
 		githubToken?: string;
 		useLoggedInUser?: boolean;
 	}) {
 		this.cliPath = opts?.cliPath;
+		this.pluginDir = opts?.pluginDir ?? '';
 		this.cliUrl = opts?.cliUrl;
 		this.githubToken = opts?.githubToken;
 		this.useLoggedInUser = opts?.useLoggedInUser;
@@ -163,10 +187,10 @@ export class CopilotService {
 			});
 		}
 		// Local mode — spawn CLI process
-		const cliPath = this.cliPath || await resolveDefaultCliPath();
+		const cliPath = this.cliPath || await resolveDefaultCliPath(this.pluginDir);
 		const os = nodeRequire?.('node:os') as typeof import('node:os') ?? await import('node:os');
 		return new CopilotClient({
-			cliPath: cliPath,
+			...(cliPath ? {cliPath} : {}),
 			cwd: os.homedir(),
 			env: cleanEnv(),
 			...(this.githubToken ? {githubToken: this.githubToken} : {}),

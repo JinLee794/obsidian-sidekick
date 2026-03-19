@@ -5133,8 +5133,14 @@ export class SidekickView extends ItemView {
 				this.renderSessionList();
 			}
 
-			const sdkAttachments = this.buildSdkAttachments(currentAttachments);
-			let fullPrompt = this.buildPrompt(sendPrompt, currentAttachments);
+			const vaultBase = (this.app.vault.adapter as any).getBasePath?.() ?? '';
+			const sdkAttachments = buildSdkAttachments({
+				attachments: currentAttachments,
+				scopePaths: currentScopePaths,
+				vaultBasePath: vaultBase,
+				app: this.app,
+			});
+			let fullPrompt = buildPrompt(sendPrompt, currentAttachments, this.cursorPosition, this.activeSelection);
 
 			// Legacy mode: eager context building. Suggest mode relies on on-demand tools.
 			if (this.plugin.settings.contextMode === 'auto' && this.contextBuilder && currentScopePaths.length > 0) {
@@ -5666,6 +5672,8 @@ import {installTriggersPanel} from './view/triggersPanel';
 import {installSessionSidebar} from './view/sessionSidebar';
 import {installInputArea} from './view/inputArea';
 import {installConfigToolbar} from './view/configToolbar';
+import {buildPrompt} from './view/sessionConfig';
+import {buildSdkAttachments} from './view/sessionConfig';
 
 installChatRenderer(SidekickView);
 installSearchPanel(SidekickView);

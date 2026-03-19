@@ -144,6 +144,27 @@ function copyArtifacts(pluginDir) {
 
     copyFileSync(source, target);
   }
+
+  // Copy the platform-specific native Copilot binary so the plugin can spawn
+  // it after deployment (the node_modules tree is not copied to the vault).
+  const ext = process.platform === "win32" ? ".exe" : "";
+  const nativePkg = `@github/copilot-${process.platform}-${process.arch}`;
+  const nativeSrc = path.join(SCRIPT_DIR, "node_modules", nativePkg, `copilot${ext}`);
+  const nativeDst = path.join(pluginDir, `copilot${ext}`);
+  if (existsSync(nativeSrc)) {
+    try {
+      copyFileSync(nativeSrc, nativeDst);
+      console.log(`Copied native binary: copilot${ext}`);
+    } catch (copyErr) {
+      if (copyErr.code === 'EBUSY' || copyErr.code === 'EPERM') {
+        console.warn(`Native binary is locked (Obsidian is running) — skipping copy. Existing binary will be used.`);
+      } else {
+        throw copyErr;
+      }
+    }
+  } else {
+    console.warn(`Native binary not found at ${nativeSrc} — plugin will rely on system PATH.`);
+  }
 }
 
 function tryReloadPlugin() {
