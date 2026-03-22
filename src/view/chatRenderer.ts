@@ -71,8 +71,7 @@ export function installChatRenderer(ViewClass: {prototype: unknown}): void {
 	proto.renderMessageBubble = function (msg: ChatMessage): Promise<void> {
 		if (msg.role === 'info') {
 			const el = this.chatContainer.createDiv({cls: 'sidekick-msg sidekick-msg-info'});
-			el.createSpan({text: msg.content});
-			return Promise.resolve();
+			return renderMarkdownSafe(this.app, msg.content, el, this.streamingComponent ?? this);
 		}
 
 		const wrapper = this.chatContainer.createDiv({

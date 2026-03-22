@@ -59,6 +59,8 @@ export function installInputArea(ViewClass: {prototype: unknown}): void {
 		// Attachments, active note & scope (shown inline after action buttons)
 		this.attachmentsBar = inputActions.createDiv({cls: 'sidekick-attachments-bar'});
 		this.activeNoteBar = inputActions.createDiv({cls: 'sidekick-active-note-bar'});
+		this.triggerTestBar = inputActions.createDiv({cls: 'sidekick-trigger-test-bar is-hidden'});
+		this.agentEditBar = inputActions.createDiv({cls: 'sidekick-agent-edit-bar is-hidden'});
 		this.scopeBar = inputActions.createDiv({cls: 'sidekick-scope-bar'});
 
 		// Row for textarea + send button
@@ -436,7 +438,10 @@ export function installInputArea(ViewClass: {prototype: unknown}): void {
 		this.activeNotePath = file ? file.path : null;
 		// Clear selection when switching files — pollSelection will pick up the new one
 		this.activeSelection = null;
+		this.rebuildSuggestions(true);
 		this.renderActiveNoteBar();
+		this.renderTriggerTestBar();
+		this.renderAgentEditBar();
 
 		// Update working directory to the parent folder of the active note
 		if (file) {
@@ -482,6 +487,7 @@ export function installInputArea(ViewClass: {prototype: unknown}): void {
 			this.editorHadFocus = false;
 			if (this.activeSelection) {
 				this.activeSelection = null;
+				this.rebuildSuggestions(true);
 				this.renderActiveNoteBar();
 			}
 			this.cursorPosition = null;
@@ -522,6 +528,7 @@ export function installInputArea(ViewClass: {prototype: unknown}): void {
 			this.editorHadFocus = editorFocused;
 			if (this.activeSelection) {
 				this.activeSelection = null;
+				this.rebuildSuggestions(true);
 				this.renderActiveNoteBar();
 			}
 			return;
@@ -548,44 +555,60 @@ export function installInputArea(ViewClass: {prototype: unknown}): void {
 			endLine: to.line + 1,
 			endChar: to.ch,
 		};
+		this.rebuildSuggestions(true);
 		this.renderActiveNoteBar();
 	};
 
 	proto.renderActiveNoteBar = function (): void {
 		this.activeNoteBar.empty();
-
-		// If there's a live editor selection, show it instead of the active note
-		if (this.activeSelection) {
-			this.activeNoteBar.removeClass('is-hidden');
-			const tag = this.activeNoteBar.createDiv({cls: 'sidekick-attachment-tag sidekick-active-note-tag'});
-			const ic = tag.createSpan({cls: 'sidekick-attachment-icon'});
-			setIcon(ic, 'text-cursor-input');
-			const sel = this.activeSelection;
-			const displayName = sel.startLine === sel.endLine
-				? `${sel.fileName}:${sel.startLine}`
-				: `${sel.fileName}:${sel.startLine}-${sel.endLine}`;
-			tag.createSpan({text: displayName, cls: 'sidekick-attachment-name'});
-			tag.setAttribute('title', `Selection in ${sel.filePath} (${sel.startLine === sel.endLine ? `line ${sel.startLine}` : `lines ${sel.startLine}-${sel.endLine}`})`);
-			return;
-		}
-
-		if (!this.activeNotePath) {
+		if (this.suggestions.length === 0) {
 			this.activeNoteBar.addClass('is-hidden');
 			return;
 		}
-		// Don't show the active note file chip when a selection attachment for the
-		// same file already exists — the selection supersedes the whole-file context.
-		if (this.attachments.some(a => a.type === 'selection' && a.path === this.activeNotePath)) {
-			this.activeNoteBar.addClass('is-hidden');
-			return;
-		}
+
 		this.activeNoteBar.removeClass('is-hidden');
-		const tag = this.activeNoteBar.createDiv({cls: 'sidekick-attachment-tag sidekick-active-note-tag'});
-		const ic = tag.createSpan({cls: 'sidekick-attachment-icon'});
-		setIcon(ic, 'file-text');
-		const name = this.activeNotePath.split('/').pop() || this.activeNotePath;
-		tag.createSpan({text: name, cls: 'sidekick-attachment-name'});
-		tag.setAttribute('title', `Active note: ${this.activeNotePath}`);
+		this.activeNoteBar.createSpan({
+			cls: 'sidekick-suggestions-label',
+			text: 'Suggested context',
+		});
+
+		for (let i = 0; i < this.suggestions.length; i++) {
+			const suggestion = this.suggestions[i];
+			if (!suggestion || suggestion.dismissed) continue;
+
+			if (this.attachments.some(a => a.type === suggestion.type && a.path === suggestion.path)) {
+				continue;
+			}
+
+			const tag = this.activeNoteBar.createDiv({cls: 'sidekick-attachment-tag sidekick-active-note-tag sidekick-suggestion-tag'});
+			const addBtn = tag.createSpan({cls: 'sidekick-suggestion-accept', attr: {title: 'Attach context'}});
+			setIcon(addBtn, 'plus');
+			addBtn.addEventListener('click', (e) => {
+				e.stopPropagation();
+				this.acceptSuggestion(i);
+			});
+
+			const body = tag.createSpan({cls: 'sidekick-suggestion-body'});
+			const ic = body.createSpan({cls: 'sidekick-attachment-icon'});
+			setIcon(ic, suggestion.type === 'selection' ? 'text-cursor-input' : 'file-text');
+			body.createSpan({text: suggestion.name, cls: 'sidekick-attachment-name'});
+			body.addEventListener('click', () => this.acceptSuggestion(i));
+
+			const removeBtn = tag.createSpan({cls: 'sidekick-suggestion-dismiss', attr: {title: 'Dismiss suggestion'}});
+			setIcon(removeBtn, 'x');
+			removeBtn.addEventListener('click', (e) => {
+				e.stopPropagation();
+				this.dismissSuggestion(i);
+			});
+
+			tag.setAttribute('title', suggestion.type === 'selection'
+				? `Suggested selection from ${suggestion.path}`
+				: `Suggested active note: ${suggestion.path}`);
+		}
+
+		if (this.activeNoteBar.children.length <= 1) {
+			this.activeNoteBar.addClass('is-hidden');
+		}
 	};
 
 	proto.openScopeModal = function (): void {

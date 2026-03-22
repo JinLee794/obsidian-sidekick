@@ -1457,7 +1457,7 @@ export class SidekickView extends ItemView {
 				: `Suggested active note: ${suggestion.path}`);
 		}
 
-		if (this.activeNoteBar.children.length === 0) {
+		if (this.activeNoteBar.children.length <= 1) {
 			this.activeNoteBar.addClass('is-hidden');
 		}
 	}
@@ -2020,17 +2020,17 @@ export class SidekickView extends ItemView {
 		const lines: string[] = ['**Trigger diagnostic:**'];
 
 		// Copilot status
-		lines.push(`Copilot connected: ${this.plugin.copilot ? 'yes' : '**NO** — triggers will not fire'}`);
+		lines.push(`- Copilot connected: ${this.plugin.copilot ? 'yes' : '**NO** — triggers will not fire'}`);
 
 		// Triggers folder
 		const triggersFolder = getTriggersFolder(this.plugin.settings);
 		const folderExists = this.app.vault.getAbstractFileByPath(triggersFolder) instanceof TFolder;
-		lines.push(`Triggers folder: \`${triggersFolder}\` ${folderExists ? '✓ exists' : '**NOT FOUND** — create this folder and add .trigger.md files'}`);
+		lines.push(`- Triggers folder: \`${triggersFolder}\` ${folderExists ? '✓ exists' : '**NOT FOUND** — create this folder and add .trigger.md files'}`);
 
 		// Loaded triggers
-		lines.push(`Loaded triggers: ${this.triggers.length}`);
+		lines.push(`- Loaded triggers: ${this.triggers.length}`);
 		if (this.triggers.length === 0) {
-			lines.push('  *(none — make sure files are named `something.trigger.md`)*');
+			lines.push('  - *(none — make sure files are named `something.trigger.md`)*');
 		} else {
 			for (const t of this.triggers) {
 				const status = t.enabled ? '✓' : '✗ disabled';
@@ -2038,7 +2038,7 @@ export class SidekickView extends ItemView {
 					t.glob ? `glob: \`${t.glob}\`` : null,
 					t.cron ? `cron: \`${t.cron}\`` : null,
 				].filter(Boolean).join(', ') || 'no schedule';
-				lines.push(`  ${status} **${t.name}** — ${schedule}`);
+				lines.push(`  - ${status} **${t.name}** — ${schedule}`);
 			}
 		}
 
@@ -2046,18 +2046,19 @@ export class SidekickView extends ItemView {
 		const enabledInScheduler = this.triggerScheduler
 			? (this.triggers.filter(t => t.enabled && t.glob).length)
 			: 0;
-		lines.push(`Active glob triggers in scheduler: ${enabledInScheduler}`);
+		lines.push(`- Active glob triggers in scheduler: ${enabledInScheduler}`);
 
 		// Last fired times
 		const lastFired = this.plugin.settings.triggerLastFired;
 		if (lastFired && Object.keys(lastFired).length > 0) {
+			lines.push('');
 			lines.push('**Last fired:**');
 			for (const [key, ts] of Object.entries(lastFired)) {
 				const ago = Math.round((Date.now() - ts) / 1000);
-				lines.push(`  ${key}: ${ago}s ago`);
+				lines.push(`- ${key}: ${ago}s ago`);
 			}
 		} else {
-			lines.push('Last fired: *(never)*');
+			lines.push('- Last fired: *(never)*');
 		}
 
 		lines.push('');
@@ -2074,7 +2075,7 @@ export class SidekickView extends ItemView {
 		if (this.currentSessionId && this.isStreaming) {
 			const name = this.sessionNames[this.currentSessionId]
 				?.replace(/^\[(chat|inline|trigger(?::[a-z0-9-]+)?|search)\]\s*/, '') || 'Current session';
-			lines.push(`  🟢 **${name}** — streaming (foreground)`);
+			lines.push(`- 🟢 **${name}** — streaming (foreground)`);
 			hasActive = true;
 		}
 
@@ -2088,12 +2089,12 @@ export class SidekickView extends ItemView {
 				: rawName.startsWith('[search]') ? 'search'
 				: rawName.startsWith('[inline]') ? 'inline' : 'chat';
 			const status = bg.isStreaming ? '🟢 streaming' : '⏸️ idle';
-			lines.push(`  ${status} **${name}** — ${type} (background)`);
+			lines.push(`- ${status} **${name}** — ${type} (background)`);
 			hasActive = true;
 		}
 
 		if (!hasActive) {
-			lines.push('  *(none running)*');
+			lines.push('- *(none running)*');
 		}
 
 		// 3. Recent sessions (last 10)
@@ -2112,7 +2113,7 @@ export class SidekickView extends ItemView {
 				const modTime = s.modifiedTime instanceof Date ? s.modifiedTime : new Date(s.modifiedTime);
 				const ago = this.formatTimeAgo(modTime);
 				const active = s.sessionId === this.currentSessionId ? ' **(active)**' : '';
-				lines.push(`  ${type} ${displayName} — ${ago}${active}`);
+				lines.push(`- ${type} ${displayName} — ${ago}${active}`);
 			}
 		}
 
@@ -2126,12 +2127,12 @@ export class SidekickView extends ItemView {
 				const key = `file:${t.name}`;
 				const lastTs = this.plugin.settings.triggerLastFired?.[key];
 				const lastInfo = lastTs ? `last fired ${Math.round((Date.now() - lastTs) / 1000)}s ago` : 'never fired';
-				lines.push(`  ⚡ **${t.name}** — glob \`${t.glob}\` (${lastInfo})`);
+				lines.push(`- ⚡ **${t.name}** — glob \`${t.glob}\` (${lastInfo})`);
 			}
 			for (const t of cronTriggers) {
 				const lastTs = this.plugin.settings.triggerLastFired?.[t.name];
 				const lastInfo = lastTs ? `last fired ${Math.round((Date.now() - lastTs) / 1000)}s ago` : 'never fired';
-				lines.push(`  ⏰ **${t.name}** — cron \`${t.cron}\` (${lastInfo})`);
+				lines.push(`- ⏰ **${t.name}** — cron \`${t.cron}\` (${lastInfo})`);
 			}
 		}
 

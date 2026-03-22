@@ -686,8 +686,13 @@
 	padding: 4px 8px;
 	font-size: var(--font-ui-smaller);
 	color: var(--text-muted);
-	font-style: italic;
 	background: none;
+}
+.sidekick-msg-info p {
+	margin: 2px 0;
+}
+.sidekick-msg-info code {
+	font-size: var(--font-ui-smaller);
 }
 
 /* Copy button on user messages */
