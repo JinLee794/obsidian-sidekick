@@ -695,6 +695,127 @@
 	font-size: var(--font-ui-smaller);
 }
 
+/* ── Tasks panel (/tasks command) ──────────────────────────── */
+.sidekick-tasks-panel {
+	padding: 8px 12px 12px;
+	font-size: var(--font-ui-smaller);
+	color: var(--text-normal);
+}
+.sidekick-tasks-section {
+	margin-bottom: 10px;
+}
+.sidekick-tasks-section:last-child {
+	margin-bottom: 0;
+}
+.sidekick-tasks-header {
+	display: flex;
+	align-items: center;
+	gap: 5px;
+	font-weight: var(--font-semibold);
+	font-size: var(--font-ui-small);
+	color: var(--text-normal);
+	padding-bottom: 4px;
+	margin-bottom: 4px;
+	border-bottom: 1px solid var(--background-modifier-border);
+}
+.sidekick-tasks-header-icon {
+	display: flex;
+	align-items: center;
+	color: var(--text-faint);
+}
+.sidekick-tasks-header-icon svg {
+	width: 14px;
+	height: 14px;
+}
+.sidekick-tasks-count {
+	margin-left: auto;
+	font-weight: var(--font-normal);
+	color: var(--text-faint);
+	font-size: var(--font-ui-smaller);
+}
+.sidekick-tasks-row {
+	display: flex;
+	align-items: center;
+	gap: 6px;
+	padding: 3px 4px;
+	border-radius: var(--radius-s);
+	min-height: 24px;
+}
+.sidekick-tasks-row-clickable {
+	cursor: pointer;
+}
+.sidekick-tasks-row-clickable:hover {
+	background: var(--background-modifier-hover);
+}
+.sidekick-tasks-row-active {
+	background: var(--background-modifier-active-hover);
+}
+.sidekick-tasks-status {
+	font-size: 8px;
+	line-height: 1;
+	flex-shrink: 0;
+}
+.sidekick-tasks-status-streaming {
+	color: var(--color-green);
+}
+.sidekick-tasks-status-idle {
+	color: var(--text-faint);
+}
+.sidekick-tasks-type-icon {
+	display: flex;
+	align-items: center;
+	flex-shrink: 0;
+	color: var(--text-faint);
+}
+.sidekick-tasks-type-icon svg {
+	width: 13px;
+	height: 13px;
+}
+.sidekick-tasks-name {
+	flex: 1;
+	overflow: hidden;
+	text-overflow: ellipsis;
+	white-space: nowrap;
+}
+.sidekick-tasks-time {
+	flex-shrink: 0;
+	color: var(--text-faint);
+	font-size: var(--font-ui-smaller);
+}
+.sidekick-tasks-detail {
+	flex-shrink: 0;
+	color: var(--text-faint);
+}
+.sidekick-tasks-detail code {
+	font-size: var(--font-ui-smaller);
+	padding: 0 4px;
+	border-radius: var(--radius-s);
+	background: var(--background-modifier-hover);
+}
+.sidekick-tasks-badge {
+	flex-shrink: 0;
+	font-size: 10px;
+	padding: 1px 6px;
+	border-radius: var(--radius-s);
+	background: var(--background-modifier-hover);
+	color: var(--text-muted);
+}
+.sidekick-tasks-badge-active {
+	background: var(--interactive-accent);
+	color: var(--text-on-accent);
+}
+.sidekick-tasks-badge-type {
+	background: none;
+	color: var(--text-faint);
+	font-style: italic;
+	padding: 0;
+}
+.sidekick-tasks-empty {
+	padding: 4px;
+	color: var(--text-faint);
+	font-style: italic;
+}
+
 /* Copy button on user messages */
 .sidekick-msg-copy {
 	flex-shrink: 0;

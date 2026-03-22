@@ -1462,6 +1462,11 @@ export class SidekickView extends ItemView {
 		}
 	}
 
+	/** Placeholder for toolbar lock state updates (e.g. disabling config during streaming). */
+	updateToolbarLock(): void {
+		// No-op — reserved for future toolbar locking behavior.
+	}
+
 	/**
 	 * Show a "Test trigger" button when the active file is a *.trigger.md inside the triggers folder.
 	 */
@@ -2068,75 +2073,124 @@ export class SidekickView extends ItemView {
 	}
 
 	showTasksOverview(): void {
-		const lines: string[] = ['**Active tasks:**'];
+		const panel = this.chatContainer.createDiv({cls: 'sidekick-tasks-panel'});
+
+		// ── Active tasks ──────────────────────────────────────
+		const activeSection = panel.createDiv({cls: 'sidekick-tasks-section'});
+		const activeHeader = activeSection.createDiv({cls: 'sidekick-tasks-header'});
+		const activeIcon = activeHeader.createSpan({cls: 'sidekick-tasks-header-icon'});
+		setIcon(activeIcon, 'activity');
+		activeHeader.createSpan({text: 'Active tasks'});
+
 		let hasActive = false;
 
-		// 1. Current foreground session
+		// Current foreground session
 		if (this.currentSessionId && this.isStreaming) {
 			const name = this.sessionNames[this.currentSessionId]
 				?.replace(/^\[(chat|inline|trigger(?::[a-z0-9-]+)?|search)\]\s*/, '') || 'Current session';
-			lines.push(`- 🟢 **${name}** — streaming (foreground)`);
+			const row = activeSection.createDiv({cls: 'sidekick-tasks-row'});
+			row.createSpan({cls: 'sidekick-tasks-status sidekick-tasks-status-streaming', text: '●'});
+			row.createSpan({cls: 'sidekick-tasks-name', text: name});
+			row.createSpan({cls: 'sidekick-tasks-badge', text: 'streaming'});
 			hasActive = true;
 		}
 
-		// 2. Background sessions
+		// Background sessions
 		for (const [id, bg] of this.activeSessions) {
-			if (id === this.currentSessionId) continue; // already shown above
+			if (id === this.currentSessionId) continue;
 			const name = this.sessionNames[id]
 				?.replace(/^\[(chat|inline|trigger(?::[a-z0-9-]+)?|search)\]\s*/, '') || `Session ${id.slice(0, 8)}`;
 			const rawName = this.sessionNames[id] || '';
 			const type = rawName.startsWith('[trigger]') || rawName.startsWith('[trigger:') ? 'trigger'
 				: rawName.startsWith('[search]') ? 'search'
 				: rawName.startsWith('[inline]') ? 'inline' : 'chat';
-			const status = bg.isStreaming ? '🟢 streaming' : '⏸️ idle';
-			lines.push(`- ${status} **${name}** — ${type} (background)`);
+			const row = activeSection.createDiv({cls: 'sidekick-tasks-row sidekick-tasks-row-clickable'});
+			row.createSpan({cls: `sidekick-tasks-status ${bg.isStreaming ? 'sidekick-tasks-status-streaming' : 'sidekick-tasks-status-idle'}`, text: '●'});
+			row.createSpan({cls: 'sidekick-tasks-name', text: name});
+			row.createSpan({cls: 'sidekick-tasks-badge sidekick-tasks-badge-type', text: type});
+			row.createSpan({cls: 'sidekick-tasks-badge', text: bg.isStreaming ? 'streaming' : 'idle'});
+			row.addEventListener('click', () => void this.selectSession(id));
+			row.setAttribute('title', `Switch to ${name}`);
 			hasActive = true;
 		}
 
 		if (!hasActive) {
-			lines.push('- *(none running)*');
+			activeSection.createDiv({cls: 'sidekick-tasks-empty', text: 'No active tasks'});
 		}
 
-		// 3. Recent sessions (last 10)
+		// ── Recent sessions ───────────────────────────────────
 		const recentCount = Math.min(this.sessionList.length, 10);
 		if (recentCount > 0) {
-			lines.push('');
-			lines.push(`**Recent sessions** (${this.sessionList.length} total):`);
+			const recentSection = panel.createDiv({cls: 'sidekick-tasks-section'});
+			const recentHeader = recentSection.createDiv({cls: 'sidekick-tasks-header'});
+			const recentIcon = recentHeader.createSpan({cls: 'sidekick-tasks-header-icon'});
+			setIcon(recentIcon, 'history');
+			recentHeader.createSpan({text: `Recent sessions`});
+			recentHeader.createSpan({cls: 'sidekick-tasks-count', text: `${this.sessionList.length}`});
+
 			for (let i = 0; i < recentCount; i++) {
 				const s = this.sessionList[i]!;
 				const rawName = this.sessionNames[s.sessionId] || '';
 				const displayName = rawName.replace(/^\[(chat|inline|trigger(?::[a-z0-9-]+)?|search)\]\s*/, '')
 					|| `Session ${s.sessionId.slice(0, 8)}`;
-				const type = rawName.startsWith('[trigger]') || rawName.startsWith('[trigger:') ? '⚡'
-					: rawName.startsWith('[search]') ? '🔍'
-					: rawName.startsWith('[inline]') ? '📝' : '💬';
+				const typeIcon = rawName.startsWith('[trigger]') || rawName.startsWith('[trigger:') ? 'zap'
+					: rawName.startsWith('[search]') ? 'search'
+					: rawName.startsWith('[inline]') ? 'file-text' : 'message-square';
 				const modTime = s.modifiedTime instanceof Date ? s.modifiedTime : new Date(s.modifiedTime);
 				const ago = this.formatTimeAgo(modTime);
-				const active = s.sessionId === this.currentSessionId ? ' **(active)**' : '';
-				lines.push(`- ${type} ${displayName} — ${ago}${active}`);
+				const isActive = s.sessionId === this.currentSessionId;
+
+				const row = recentSection.createDiv({cls: `sidekick-tasks-row sidekick-tasks-row-clickable${isActive ? ' sidekick-tasks-row-active' : ''}`});
+				const ic = row.createSpan({cls: 'sidekick-tasks-type-icon'});
+				setIcon(ic, typeIcon);
+				row.createSpan({cls: 'sidekick-tasks-name', text: displayName});
+				row.createSpan({cls: 'sidekick-tasks-time', text: ago});
+				if (isActive) {
+					row.createSpan({cls: 'sidekick-tasks-badge sidekick-tasks-badge-active', text: 'active'});
+				}
+				row.addEventListener('click', () => void this.selectSession(s.sessionId));
+				row.setAttribute('title', `Switch to ${displayName}`);
 			}
 		}
 
-		// 4. Pending triggers (glob-based, showing next-fire readiness)
+		// ── Watching triggers ─────────────────────────────────
 		const globTriggers = this.triggers.filter(t => t.enabled && t.glob);
 		const cronTriggers = this.triggers.filter(t => t.enabled && t.cron);
 		if (globTriggers.length > 0 || cronTriggers.length > 0) {
-			lines.push('');
-			lines.push('**Watching triggers:**');
+			const triggerSection = panel.createDiv({cls: 'sidekick-tasks-section'});
+			const triggerHeader = triggerSection.createDiv({cls: 'sidekick-tasks-header'});
+			const triggerIcon = triggerHeader.createSpan({cls: 'sidekick-tasks-header-icon'});
+			setIcon(triggerIcon, 'zap');
+			triggerHeader.createSpan({text: 'Watching triggers'});
+
 			for (const t of globTriggers) {
 				const key = `file:${t.name}`;
 				const lastTs = this.plugin.settings.triggerLastFired?.[key];
-				const lastInfo = lastTs ? `last fired ${Math.round((Date.now() - lastTs) / 1000)}s ago` : 'never fired';
-				lines.push(`- ⚡ **${t.name}** — glob \`${t.glob}\` (${lastInfo})`);
+				const lastInfo = lastTs ? this.formatTimeAgo(new Date(lastTs)) : 'never';
+
+				const row = triggerSection.createDiv({cls: 'sidekick-tasks-row'});
+				const ic = row.createSpan({cls: 'sidekick-tasks-type-icon'});
+				setIcon(ic, 'zap');
+				row.createSpan({cls: 'sidekick-tasks-name', text: t.name});
+				const detail = row.createSpan({cls: 'sidekick-tasks-detail'});
+				detail.createEl('code', {text: t.glob});
+				row.createSpan({cls: 'sidekick-tasks-time', text: `fired ${lastInfo}`});
 			}
 			for (const t of cronTriggers) {
 				const lastTs = this.plugin.settings.triggerLastFired?.[t.name];
-				const lastInfo = lastTs ? `last fired ${Math.round((Date.now() - lastTs) / 1000)}s ago` : 'never fired';
-				lines.push(`- ⏰ **${t.name}** — cron \`${t.cron}\` (${lastInfo})`);
+				const lastInfo = lastTs ? this.formatTimeAgo(new Date(lastTs)) : 'never';
+
+				const row = triggerSection.createDiv({cls: 'sidekick-tasks-row'});
+				const ic = row.createSpan({cls: 'sidekick-tasks-type-icon'});
+				setIcon(ic, 'clock');
+				row.createSpan({cls: 'sidekick-tasks-name', text: t.name});
+				const detail = row.createSpan({cls: 'sidekick-tasks-detail'});
+				detail.createEl('code', {text: t.cron!});
+				row.createSpan({cls: 'sidekick-tasks-time', text: `fired ${lastInfo}`});
 			}
 		}
 
-		this.addInfoMessage(lines.join('\n'));
+		this.scrollToBottom();
 	}
 
 	// ── @agent mention handling ──────────────────────────────────
