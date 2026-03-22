@@ -307,6 +307,22 @@
 	opacity: 0.5;
 }
 
+.sidekick-trigger-icon-preview {
+	display: inline-flex;
+	align-items: center;
+	justify-content: center;
+	width: 24px;
+	height: 24px;
+	margin-right: 6px;
+	vertical-align: middle;
+}
+
+.sidekick-trigger-icon-preview svg {
+	width: 18px;
+	height: 18px;
+	color: var(--text-muted);
+}
+
 .sidekick-triggers-enabled-dot {
 	position: absolute;
 	bottom: -2px;
@@ -330,13 +346,17 @@
 	flex-direction: column;
 	height: 100%;
 	overflow-y: auto;
+	overflow-x: hidden;
 	padding: 0;
+	width: 0;
+	min-width: 100%;
 }
 
 .sidekick-tools-section {
 	display: flex;
 	flex-direction: column;
 	border-bottom: 1px solid var(--background-modifier-border);
+	overflow: hidden;
 }
 
 .sidekick-tools-section:last-child {
@@ -381,6 +401,7 @@
 
 .sidekick-tools-list {
 	overflow-y: auto;
+	overflow-x: hidden;
 	flex: 1;
 	min-height: 0;
 	padding: 4px 0;
@@ -504,6 +525,7 @@
 
 .sidekick-tools-toggle {
 	flex-shrink: 0;
+	margin-left: 8px;
 }
 
 /* Agent tool mapping */
@@ -511,6 +533,9 @@
 .sidekick-tools-agent-item {
 	padding: 8px 10px;
 	border-bottom: 1px solid var(--background-modifier-border-focus);
+	overflow: hidden;
+	width: 100%;
+	box-sizing: border-box;
 }
 
 .sidekick-tools-agent-item:last-child {
@@ -521,7 +546,12 @@
 	display: flex;
 	align-items: center;
 	gap: 6px;
-	margin-bottom: 4px;
+	margin-bottom: 2px;
+	min-width: 0;
+}
+
+.sidekick-tools-agent-icon {
+	flex-shrink: 0;
 }
 
 .sidekick-tools-agent-icon svg {
@@ -534,6 +564,11 @@
 	font-size: var(--font-ui-small);
 	font-weight: var(--font-medium);
 	color: var(--text-normal);
+	white-space: nowrap;
+	overflow: hidden;
+	text-overflow: ellipsis;
+	min-width: 0;
+	flex: 1 1 0;
 }
 
 .sidekick-tools-agent-desc {
@@ -542,7 +577,10 @@
 	overflow: hidden;
 	text-overflow: ellipsis;
 	white-space: nowrap;
-	margin-left: auto;
+	padding-left: 20px;
+	margin-bottom: 4px;
+	max-width: 100%;
+	display: block;
 }
 
 .sidekick-tools-agent-tools {
@@ -550,6 +588,7 @@
 	flex-wrap: wrap;
 	gap: 4px;
 	padding-left: 20px;
+	overflow: hidden;
 }
 
 /* ── Chat area ────────────────────────────────────────────────── */
@@ -686,7 +725,8 @@
 .sidekick-msg-body-wrapper {
 	flex: 1;
 	min-width: 0;
-	overflow: hidden;
+	overflow-x: auto;
+	overflow-y: hidden;
 }
 
 .sidekick-msg-body {
@@ -714,6 +754,111 @@
 
 .sidekick-msg-body code {
 	font-size: 0.9em;
+}
+
+/* ── Tables ─────────────────────────────────────────────────── */
+.sidekick-msg-body table {
+	border-collapse: separate;
+	border-spacing: 0;
+	width: 100%;
+	margin: 10px 0;
+	font-size: var(--font-ui-small);
+	border: 1px solid var(--background-modifier-border);
+	border-radius: var(--radius-s);
+	overflow: hidden;
+}
+
+.sidekick-msg-body th,
+.sidekick-msg-body td {
+	padding: 6px 10px;
+	text-align: left;
+	border-bottom: 1px solid var(--background-modifier-border);
+}
+
+.sidekick-msg-body th {
+	background: var(--background-secondary);
+	font-weight: var(--font-semibold);
+	color: var(--text-normal);
+	font-size: var(--font-ui-smaller);
+	text-transform: uppercase;
+	letter-spacing: 0.03em;
+}
+
+.sidekick-msg-body tr:last-child td {
+	border-bottom: none;
+}
+
+.sidekick-msg-body tr:nth-child(even) {
+	background: var(--background-primary-alt);
+}
+
+.sidekick-msg-body tr:hover td {
+	background: var(--background-modifier-hover);
+}
+
+/* ── Headings inside messages ───────────────────────────────── */
+.sidekick-msg-body h1,
+.sidekick-msg-body h2,
+.sidekick-msg-body h3,
+.sidekick-msg-body h4,
+.sidekick-msg-body h5,
+.sidekick-msg-body h6 {
+	margin-top: 12px;
+	margin-bottom: 4px;
+	line-height: 1.3;
+}
+
+.sidekick-msg-body h1:first-child,
+.sidekick-msg-body h2:first-child,
+.sidekick-msg-body h3:first-child {
+	margin-top: 0;
+}
+
+.sidekick-msg-body h1 { font-size: 1.25em; }
+.sidekick-msg-body h2 { font-size: 1.15em; }
+.sidekick-msg-body h3 { font-size: 1.05em; }
+.sidekick-msg-body h4,
+.sidekick-msg-body h5,
+.sidekick-msg-body h6 { font-size: 1em; }
+
+/* ── Lists ──────────────────────────────────────────────────── */
+.sidekick-msg-body ul,
+.sidekick-msg-body ol {
+	margin: 6px 0;
+	padding-left: 1.5em;
+}
+
+.sidekick-msg-body li {
+	margin-bottom: 2px;
+}
+
+.sidekick-msg-body li > ul,
+.sidekick-msg-body li > ol {
+	margin-top: 2px;
+	margin-bottom: 2px;
+}
+
+/* ── Blockquotes ────────────────────────────────────────────── */
+.sidekick-msg-body blockquote {
+	border-left: 3px solid var(--interactive-accent);
+	margin: 8px 0;
+	padding: 4px 12px;
+	color: var(--text-muted);
+	background: var(--background-primary-alt);
+	border-radius: 0 var(--radius-s) var(--radius-s) 0;
+}
+
+/* ── Horizontal rules ───────────────────────────────────────── */
+.sidekick-msg-body hr {
+	border: none;
+	border-top: 1px solid var(--background-modifier-border);
+	margin: 10px 0;
+}
+
+/* ── Strong & emphasis ──────────────────────────────────────── */
+.sidekick-msg-body strong {
+	font-weight: var(--font-semibold);
+	color: var(--text-normal);
 }
 
 .sidekick-msg-attachments {
@@ -1087,6 +1232,49 @@
 	stroke-width: 2px;
 }
 
+/* Handoff buttons */
+
+.sidekick-handoff-buttons {
+	display: flex;
+	flex-wrap: wrap;
+	gap: 6px;
+	padding: 8px 0 2px;
+	margin-top: 6px;
+	border-top: 1px solid var(--background-modifier-border);
+}
+
+.sidekick-handoff-btn {
+	display: inline-flex;
+	align-items: center;
+	gap: 4px;
+	padding: 4px 10px;
+	font-size: var(--font-ui-smaller);
+	color: var(--text-normal);
+	background: var(--background-modifier-hover);
+	border: 1px solid var(--background-modifier-border);
+	border-radius: var(--radius-s);
+	cursor: pointer;
+	transition: background 0.15s ease, border-color 0.15s ease;
+}
+
+.sidekick-handoff-btn:hover {
+	background: var(--interactive-hover);
+	border-color: var(--interactive-accent);
+	color: var(--interactive-accent);
+}
+
+.sidekick-handoff-icon {
+	display: inline-flex;
+	align-items: center;
+	opacity: 0.7;
+}
+
+.sidekick-handoff-icon svg {
+	width: 12px;
+	height: 12px;
+	stroke-width: 2px;
+}
+
 /* Thinking indicator */
 
 .sidekick-thinking {
@@ -1220,6 +1408,90 @@
 	flex-wrap: wrap;
 	align-items: center;
 	gap: 4px;
+}
+
+.sidekick-trigger-test-bar {
+	display: flex;
+	align-items: center;
+	gap: 4px;
+}
+
+.sidekick-trigger-test-bar.is-hidden {
+	display: none;
+}
+
+.sidekick-trigger-test-btn {
+	display: inline-flex;
+	align-items: center;
+	gap: 6px;
+	padding: 4px 10px;
+	border-radius: var(--radius-s);
+	border: 1px solid var(--background-modifier-border);
+	background: var(--interactive-normal);
+	color: var(--text-normal);
+	font-size: var(--font-ui-small);
+	cursor: pointer;
+	white-space: nowrap;
+	transition: background 0.15s, border-color 0.15s;
+}
+
+.sidekick-trigger-test-btn:hover {
+	background: var(--interactive-hover);
+	border-color: var(--interactive-accent);
+}
+
+.sidekick-trigger-test-icon {
+	display: flex;
+	align-items: center;
+}
+
+.sidekick-trigger-test-icon svg {
+	width: 14px;
+	height: 14px;
+	color: var(--interactive-accent);
+}
+
+/* Agent edit bar (shown when active file is *.agent.md) */
+
+.sidekick-agent-edit-bar {
+	display: flex;
+	align-items: center;
+	gap: 4px;
+}
+
+.sidekick-agent-edit-bar.is-hidden {
+	display: none;
+}
+
+.sidekick-agent-edit-bar-btn {
+	display: inline-flex;
+	align-items: center;
+	gap: 6px;
+	padding: 4px 10px;
+	border-radius: var(--radius-s);
+	border: 1px solid var(--background-modifier-border);
+	background: var(--interactive-normal);
+	color: var(--text-normal);
+	font-size: var(--font-ui-small);
+	cursor: pointer;
+	white-space: nowrap;
+	transition: background 0.15s, border-color 0.15s;
+}
+
+.sidekick-agent-edit-bar-btn:hover {
+	background: var(--interactive-hover);
+	border-color: var(--interactive-accent);
+}
+
+.sidekick-agent-edit-bar-icon {
+	display: flex;
+	align-items: center;
+}
+
+.sidekick-agent-edit-bar-icon svg {
+	width: 14px;
+	height: 14px;
+	color: var(--interactive-accent);
 }
 
 /* ── Settings tab bar ─────────────────────────────────────────── */
@@ -2472,4 +2744,412 @@ body.sidekick-no-select {
 	margin-top: 16px;
 }
 
+.sidekick-trigger-cron-examples {
+	display: flex;
+	flex-wrap: wrap;
+	align-items: center;
+	gap: 6px;
+	margin-bottom: 10px;
+	font-size: var(--font-ui-smaller);
+}
 
+.sidekick-trigger-cron-examples-label {
+	color: var(--text-muted);
+	font-weight: var(--font-semibold);
+}
+
+.sidekick-trigger-cron-example-chip {
+	display: inline-block;
+	padding: 2px 10px;
+	border-radius: var(--radius-s);
+	background: var(--background-secondary);
+	color: var(--text-muted);
+	font-size: var(--font-ui-smaller);
+	border: 1px solid var(--background-modifier-border);
+	cursor: pointer;
+	transition: background 0.15s, color 0.15s;
+}
+
+.sidekick-trigger-cron-example-chip:hover {
+	background: var(--interactive-accent);
+	color: var(--text-on-accent);
+	border-color: var(--interactive-accent);
+}
+
+.sidekick-trigger-ai-tip {
+	display: flex;
+	align-items: flex-start;
+	gap: 8px;
+	padding: 10px 14px;
+	margin-top: 12px;
+	border-radius: var(--radius-s);
+	background: var(--background-secondary);
+	font-size: var(--font-ui-smaller);
+	color: var(--text-muted);
+	line-height: 1.5;
+}
+
+.sidekick-trigger-ai-tip-icon {
+	flex-shrink: 0;
+	margin-top: 1px;
+	color: var(--interactive-accent);
+}
+
+.sidekick-trigger-ai-tip-icon svg {
+	width: 16px;
+	height: 16px;
+}
+
+/* ── MCP editor modal ─────────────────────────────────────── */
+
+.sidekick-mcp-editor-modal {
+	width: 600px;
+	max-width: 90vw;
+}
+
+.sidekick-mcp-editor-path {
+	font-size: var(--font-ui-smaller);
+	color: var(--text-faint);
+	margin-bottom: 8px;
+}
+
+.sidekick-mcp-editor-textarea {
+	width: 100%;
+	min-height: 300px;
+	font-family: var(--font-monospace);
+	font-size: var(--font-ui-small);
+	line-height: 1.5;
+	padding: 8px;
+	border: 1px solid var(--background-modifier-border);
+	border-radius: var(--radius-s);
+	background: var(--background-primary);
+	color: var(--text-normal);
+	resize: vertical;
+	tab-size: 2;
+}
+
+.sidekick-mcp-editor-textarea.is-invalid {
+	border-color: var(--color-red);
+}
+
+.sidekick-mcp-editor-error {
+	min-height: 24px;
+	margin: 6px 0;
+}
+
+.sidekick-mcp-editor-error-text {
+	font-size: var(--font-ui-smaller);
+}
+
+.sidekick-mcp-editor-error-text.is-error {
+	color: var(--color-red);
+}
+
+.sidekick-mcp-editor-error-text.is-warning {
+	color: var(--color-yellow);
+}
+
+.sidekick-mcp-editor-buttons {
+	display: flex;
+	justify-content: flex-end;
+	gap: 8px;
+	margin-top: 4px;
+}
+
+
+/* ── Agent editor modal ──────────────────────────────────── */
+
+/* Override Obsidian's .modal wrapper for proper sizing */
+.modal:has(.sidekick-agent-editor) {
+	width: 640px;
+	max-width: 90vw;
+	max-height: 85vh;
+	height: 85vh;
+	display: flex;
+	flex-direction: column;
+	overflow: hidden;
+}
+
+.modal:has(.sidekick-agent-editor) .modal-content {
+	flex: 1 1 auto;
+	min-height: 0;
+	display: flex;
+	flex-direction: column;
+	overflow: hidden;
+	padding: 0;
+}
+
+.sidekick-agent-editor {
+	display: flex;
+	flex-direction: column;
+	flex: 1 1 auto;
+	min-height: 0;
+	overflow: hidden;
+	padding: 0 20px 16px;
+	box-sizing: border-box;
+	width: 100%;
+}
+
+.sidekick-agent-editor *,
+.sidekick-agent-editor *::before,
+.sidekick-agent-editor *::after {
+	box-sizing: border-box;
+}
+
+.sidekick-agent-editor h3 {
+	flex-shrink: 0;
+	margin: 0 0 8px;
+}
+
+.sidekick-agent-editor-form {
+	display: flex;
+	flex-direction: column;
+	gap: 12px;
+	flex: 1 1 auto;
+	overflow-y: auto;
+	min-height: 0;
+	padding: 2px 8px 2px 0;
+}
+
+.sidekick-agent-editor-field {
+	display: flex;
+	flex-direction: column;
+	gap: 4px;
+	min-width: 0;
+}
+
+.sidekick-agent-editor-label {
+	display: flex;
+	flex-wrap: wrap;
+	align-items: baseline;
+	gap: 6px;
+}
+
+.sidekick-agent-editor-label-text {
+	font-weight: var(--font-semibold);
+	font-size: var(--font-ui-small);
+}
+
+.sidekick-agent-editor-hint {
+	font-size: var(--font-ui-smaller);
+	color: var(--text-faint);
+}
+
+.sidekick-agent-editor-input {
+	width: 100%;
+	padding: 6px 8px;
+	font-size: var(--font-ui-small);
+	border: 1px solid var(--background-modifier-border);
+	border-radius: var(--radius-s);
+	background: var(--background-primary);
+	color: var(--text-normal);
+	box-sizing: border-box;
+}
+
+.sidekick-agent-editor-textarea {
+	width: 100%;
+	min-height: 100px;
+	font-family: var(--font-monospace);
+	font-size: var(--font-ui-small);
+	line-height: 1.5;
+	padding: 8px;
+	border: 1px solid var(--background-modifier-border);
+	border-radius: var(--radius-s);
+	background: var(--background-primary);
+	color: var(--text-normal);
+	resize: vertical;
+	box-sizing: border-box;
+}
+
+.sidekick-agent-editor-all-row {
+	display: flex;
+	align-items: center;
+	gap: 4px;
+	font-size: var(--font-ui-smaller);
+	color: var(--text-muted);
+	margin-bottom: 4px;
+}
+
+.sidekick-agent-editor-chips {
+	display: flex;
+	flex-wrap: wrap;
+	gap: 4px;
+}
+
+.sidekick-agent-editor-chip {
+	display: inline-flex;
+	align-items: center;
+	gap: 3px;
+	padding: 3px 8px;
+	font-size: var(--font-ui-smaller);
+	border: 1px solid var(--background-modifier-border);
+	border-radius: var(--radius-s);
+	cursor: pointer;
+	color: var(--text-muted);
+	background: var(--background-secondary);
+	transition: all 0.15s ease;
+}
+
+.sidekick-agent-editor-chip.is-selected {
+	background: var(--interactive-accent);
+	color: var(--text-on-accent);
+	border-color: var(--interactive-accent);
+}
+
+.sidekick-agent-editor-chip input[type="checkbox"] {
+	display: none;
+}
+
+.sidekick-agent-editor-chip-icon {
+	display: inline-flex;
+	align-items: center;
+}
+
+.sidekick-agent-editor-chip-icon svg {
+	width: 12px;
+	height: 12px;
+}
+
+.sidekick-agent-editor-muted {
+	font-size: var(--font-ui-smaller);
+	color: var(--text-faint);
+	font-style: italic;
+}
+
+/* Handoff cards */
+
+.sidekick-agent-editor-handoffs {
+	display: flex;
+	flex-direction: column;
+	gap: 8px;
+}
+
+.sidekick-agent-editor-handoff-card {
+	border: 1px solid var(--background-modifier-border);
+	border-radius: var(--radius-s);
+	padding: 8px;
+	background: var(--background-secondary);
+	display: flex;
+	flex-direction: column;
+	gap: 6px;
+}
+
+.sidekick-agent-editor-handoff-header {
+	display: flex;
+	justify-content: space-between;
+	align-items: center;
+}
+
+.sidekick-agent-editor-handoff-num {
+	font-size: var(--font-ui-smaller);
+	font-weight: var(--font-semibold);
+	color: var(--text-muted);
+}
+
+.sidekick-agent-editor-remove-btn {
+	color: var(--text-muted);
+}
+
+.sidekick-agent-editor-remove-btn:hover {
+	color: var(--color-red);
+}
+
+.sidekick-agent-editor-handoff-row {
+	display: flex;
+	align-items: center;
+	gap: 8px;
+}
+
+.sidekick-agent-editor-handoff-field-label {
+	font-size: var(--font-ui-smaller);
+	color: var(--text-muted);
+	min-width: 44px;
+}
+
+.sidekick-agent-editor-handoff-prompt {
+	width: 100%;
+	font-family: var(--font-monospace);
+	font-size: var(--font-ui-smaller);
+	line-height: 1.4;
+	padding: 6px;
+	border: 1px solid var(--background-modifier-border);
+	border-radius: var(--radius-s);
+	background: var(--background-primary);
+	color: var(--text-normal);
+	resize: vertical;
+	box-sizing: border-box;
+}
+
+.sidekick-agent-editor-handoff-opts {
+	display: flex;
+	align-items: center;
+	gap: 12px;
+}
+
+.sidekick-agent-editor-inline-label {
+	display: inline-flex;
+	align-items: center;
+	gap: 4px;
+	font-size: var(--font-ui-smaller);
+	color: var(--text-muted);
+	cursor: pointer;
+}
+
+.sidekick-agent-editor-handoff-model {
+	flex: 1;
+	min-width: 120px;
+}
+
+.sidekick-agent-editor-add-btn {
+	align-self: flex-start;
+	padding: 4px 10px;
+	font-size: var(--font-ui-smaller);
+	color: var(--text-muted);
+	background: var(--background-modifier-hover);
+	border: 1px dashed var(--background-modifier-border);
+	border-radius: var(--radius-s);
+	cursor: pointer;
+	margin-top: 4px;
+}
+
+.sidekick-agent-editor-add-btn:hover {
+	color: var(--interactive-accent);
+	border-color: var(--interactive-accent);
+}
+
+.sidekick-agent-editor-buttons {
+	display: flex;
+	justify-content: flex-end;
+	gap: 8px;
+	margin-top: 12px;
+	flex-shrink: 0;
+	padding-top: 8px;
+	border-top: 1px solid var(--background-modifier-border);
+}
+
+.sidekick-agent-editor-suggest-wrapper {
+	position: relative;
+}
+
+/* Agent edit button in toolbar */
+.sidekick-agent-edit-btn {
+	padding: 2px;
+	margin-left: -2px;
+}
+
+/* Agent edit button in tools panel */
+.sidekick-tools-agent-edit {
+	margin-left: auto;
+	padding: 2px;
+	opacity: 0;
+	transition: opacity 0.15s ease;
+}
+
+.sidekick-tools-agent-header:hover .sidekick-tools-agent-edit {
+	opacity: 1;
+}
+
+.sidekick-tools-agent-edit svg {
+	width: 14px;
+	height: 14px;
+}

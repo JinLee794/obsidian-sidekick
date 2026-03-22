@@ -5,30 +5,47 @@ import {
 	normalizePath,
 	setIcon,
 	Component,
+	TFile,
+	TFolder,
+	Menu,
+	MarkdownView,
+	Modal,
 } from 'obsidian';
 import type SidekickPlugin from './main';
 import {approveAll} from './copilot';
 import type {
 	CopilotSession,
 	SessionConfig,
+	SessionMetadata,
 	MCPServerConfig,
 	ModelInfo,
+	MessageOptions,
 	PermissionRequest,
 	ProviderConfig,
 	ReasoningEffort,
 	CustomAgentConfig,
 } from './copilot';
 import type {AgentConfig, SkillInfo, McpServerEntry, McpInputVariable, PromptConfig, TriggerConfig, ChatMessage, ChatAttachment, SelectionInfo, ContextSuggestion} from './types';
-import {loadAgents, loadSkills, loadMcpServers, loadPrompts, loadTriggers} from './configLoader';
+import {loadAgents, loadSkills, loadMcpServers, loadPrompts, loadTriggers, loadInstructions} from './configLoader';
 import type {InputResolver} from './configLoader';
 import {getAgentsFolder, getSkillsFolder, getToolsFolder, getPromptsFolder, getTriggersFolder, getMcpInputValue, setMcpInputValue, McpInputPromptModal} from './settings';
 import {TriggerScheduler} from './triggerScheduler';
 import type {TriggerFireContext} from './triggerScheduler';
 import {VaultIndex} from './vaultIndex';
 import {ContextBuilder} from './contextBuilder';
-import {VaultScopeModal, EditModal} from './modals';
+import {VaultScopeModal} from './modals/vaultScopeModal';
+import {EditModal} from './modals/editModal';
+import {ToolApprovalModal} from './modals/toolApprovalModal';
+import {FolderTreeModal} from './modals/folderTreeModal';
+import {McpEditorModal} from './modals/mcpEditorModal';
+import {AgentEditorModal} from './modals/agentEditorModal';
+import type {AgentEditorContext} from './modals/agentEditorModal';
+import {UserInputModal} from './modals/userInputModal';
+import type {UserInputRequest} from './modals/userInputModal';
 import {NewTriggerModal} from './triggerModal';
 import {debugTrace, setDebugEnabled} from './debug';
+import type {BackgroundSession} from './view/types';
+import {mapMcpServers, buildSdkAttachments, buildPrompt} from './view/sessionConfig';
 
 export const SIDEKICK_VIEW_TYPE = 'sidekick-view';
 
@@ -38,39 +55,41 @@ export class SidekickView extends ItemView {
 	plugin: SidekickPlugin;
 
 	// ── State ────────────────────────────────────────────────────
-	private messages: ChatMessage[] = [];
-	private currentSession: CopilotSession | null = null;
-	private agents: AgentConfig[] = [];
-	private models: ModelInfo[] = [];
-	private skills: SkillInfo[] = [];
-	private mcpServers: McpServerEntry[] = [];
+	messages: ChatMessage[] = [];
+	currentSession: CopilotSession | null = null;
+	agents: AgentConfig[] = [];
+	models: ModelInfo[] = [];
+	skills: SkillInfo[] = [];
+	mcpServers: McpServerEntry[] = [];
 	/** Runtime MCP server status tracked from session.info/warning events. */
-	private mcpServerStatus = new Map<string, {status: 'pending' | 'connected' | 'error'; message?: string}>();
-	private prompts: PromptConfig[] = [];
-	private triggers: TriggerConfig[] = [];
-	private triggerScheduler: TriggerScheduler | null = null;
-	private vaultIndex: VaultIndex | null = null;
-	private contextBuilder: ContextBuilder | null = null;
-	private sessionContextPaths = new Set<string>();
-	private activePrompt: PromptConfig | null = null;
+	mcpServerStatus = new Map<string, {status: 'pending' | 'connected' | 'error'; message?: string}>();
+	prompts: PromptConfig[] = [];
+	triggers: TriggerConfig[] = [];
+	/** Concatenated content from *.instructions.md files, prepended to every session. */
+	globalInstructions = '';
+	triggerScheduler: TriggerScheduler | null = null;
+	vaultIndex: VaultIndex | null = null;
+	contextBuilder: ContextBuilder | null = null;
+	sessionContextPaths = new Set<string>();
+	activePrompt: PromptConfig | null = null;
 
-	private selectedAgent = '';
-	private selectedModel = '';
-	private enabledSkills: Set<string> = new Set();
-	private enabledMcpServers: Set<string> = new Set();
-	private attachments: ChatAttachment[] = [];
-	private suggestions: ContextSuggestion[] = [];
-	private activeNotePath: string | null = null;
+	selectedAgent = '';
+	selectedModel = '';
+	enabledSkills: Set<string> = new Set();
+	enabledMcpServers: Set<string> = new Set();
+	attachments: ChatAttachment[] = [];
+	suggestions: ContextSuggestion[] = [];
+	activeNotePath: string | null = null;
 	/** Live editor selection for the active note (null when no text is selected). */
-	private activeSelection: {filePath: string; fileName: string; text: string; startLine: number; startChar: number; endLine: number; endChar: number} | null = null;
-	private selectionPollTimer: ReturnType<typeof setInterval> | null = null;
+	activeSelection: {filePath: string; fileName: string; text: string; startLine: number; startChar: number; endLine: number; endChar: number} | null = null;
+	selectionPollTimer: ReturnType<typeof setInterval> | null = null;
 	/** Whether the MarkdownView editor was focused on the previous poll tick. */
-	private editorHadFocus = false;
+	editorHadFocus = false;
 	/** Current cursor position in the active note (when no text is selected). */
-	private cursorPosition: {filePath: string; fileName: string; line: number; ch: number} | null = null;
-	private scopePaths: string[] = [];
-	private workingDir = '';  // vault-relative path, '' means vault root
-	private triageAgentForSession: string | null = null;
+	cursorPosition: {filePath: string; fileName: string; line: number; ch: number} | null = null;
+	scopePaths: string[] = [];
+	workingDir = '';  // vault-relative path, '' means vault root
+	triageAgentForSession: string | null = null;
 
 	isStreaming = false;
 	configDirty = true;
@@ -86,6 +105,7 @@ export class SidekickView extends ItemView {
 	turnSkillsUsed: string[] = [];
 	turnUsage: {inputTokens: number; outputTokens: number; cacheReadTokens: number; cacheWriteTokens: number; model?: string} | null = null;
 	activeToolCalls = new Map<string, {toolName: string; detailsEl: HTMLDetailsElement}>();
+	activeSubagentBlocks = new Map<string, HTMLElement>();
 
 	// ── Session sidebar state ──────────────────────────────────
 	activeSessions = new Map<string, BackgroundSession>();
@@ -98,7 +118,7 @@ export class SidekickView extends ItemView {
 	sessionSort: 'modified' | 'created' | 'name' = 'modified';
 
 	// ── Tab state ────────────────────────────────────────────────
-	private activeTab: 'chat' | 'triggers' | 'search' | 'tools' = 'chat';
+	activeTab: 'chat' | 'triggers' | 'search' | 'tools' = 'chat';
 
 	// ── Triggers panel state ─────────────────────────────────────
 	triggerHistoryFilter = '';
@@ -127,38 +147,40 @@ export class SidekickView extends ItemView {
 	basicSearchSession: CopilotSession | null = null;
 
 	// ── Search result cache ────────────────────────────────────
-	private searchCache = new Map<string, {content: string; cachedAt: number; scopePaths: string[]; mode: 'basic' | 'advanced'; agent?: string}>();
-	private static readonly SEARCH_CACHE_TTL = 5 * 60 * 1000;
-	private static readonly SEARCH_CACHE_MAX = 50;
+	searchCache = new Map<string, {content: string; cachedAt: number; scopePaths: string[]; mode: 'basic' | 'advanced'; agent?: string}>();
+	static readonly SEARCH_CACHE_TTL = 5 * 60 * 1000;
+	static readonly SEARCH_CACHE_MAX = 50;
 
 	// ── DOM refs ─────────────────────────────────────────────────
-	private mainEl!: HTMLElement;
-	private tabBarEl!: HTMLElement;
-	private chatPanelEl!: HTMLElement;
-	private triggersPanelEl!: HTMLElement;
-	private searchPanelEl!: HTMLElement;
-	private toolsPanelEl!: HTMLElement;
-	private toolsMcpListEl!: HTMLElement;
-	private toolsAgentListEl!: HTMLElement;
-	private triggerHistoryListEl!: HTMLElement;
-	private triggerConfigListEl!: HTMLElement;
-	private chatContainer!: HTMLElement;
-	private streamingBodyEl: HTMLElement | null = null;
-	private toolCallsContainer: HTMLElement | null = null;
-	private inputEl!: HTMLTextAreaElement;
-	private attachmentsBar!: HTMLElement;
-	private activeNoteBar!: HTMLElement;
-	private scopeBar!: HTMLElement;
-	private sendBtn!: HTMLButtonElement;
-	private agentSelect!: HTMLSelectElement;
-	private modelSelect!: HTMLSelectElement;
-	private modelIconEl!: HTMLSpanElement;
-	private skillsBtnEl!: HTMLButtonElement;
-	private toolsBtnEl!: HTMLButtonElement;
-	private cwdBtnEl!: HTMLButtonElement;
-	private debugBtnEl!: HTMLElement;
-	private streamingComponent: Component | null = null;
-	private streamingWrapperEl: HTMLElement | null = null;
+	mainEl!: HTMLElement;
+	tabBarEl!: HTMLElement;
+	chatPanelEl!: HTMLElement;
+	triggersPanelEl!: HTMLElement;
+	searchPanelEl!: HTMLElement;
+	toolsPanelEl!: HTMLElement;
+	toolsMcpListEl!: HTMLElement;
+	toolsAgentListEl!: HTMLElement;
+	triggerHistoryListEl!: HTMLElement;
+	triggerConfigListEl!: HTMLElement;
+	chatContainer!: HTMLElement;
+	streamingBodyEl: HTMLElement | null = null;
+	toolCallsContainer: HTMLElement | null = null;
+	inputEl!: HTMLTextAreaElement;
+	attachmentsBar!: HTMLElement;
+	activeNoteBar!: HTMLElement;
+	triggerTestBar!: HTMLElement;
+	agentEditBar!: HTMLElement;
+	scopeBar!: HTMLElement;
+	sendBtn!: HTMLButtonElement;
+	agentSelect!: HTMLSelectElement;
+	modelSelect!: HTMLSelectElement;
+	modelIconEl!: HTMLSpanElement;
+	skillsBtnEl!: HTMLButtonElement;
+	toolsBtnEl!: HTMLButtonElement;
+	cwdBtnEl!: HTMLButtonElement;
+	debugBtnEl!: HTMLElement;
+	streamingComponent: Component | null = null;
+	streamingWrapperEl: HTMLElement | null = null;
 
 	// ── Config file watcher ──────────────────────────────────────
 	configRefreshTimer: ReturnType<typeof setTimeout> | null = null;
@@ -170,13 +192,13 @@ export class SidekickView extends ItemView {
 	promptDropdownIndex = -1;
 
 	// ── Agent mention dropdown DOM refs ─────────────────────────
-	private agentDropdown: HTMLElement | null = null;
-	private agentDropdownIndex = -1;
+	agentDropdown: HTMLElement | null = null;
+	agentDropdownIndex = -1;
 	/** Position in the input where the `@` mention starts. */
-	private agentMentionStart = -1;
+	agentMentionStart = -1;
 
 	// ── Built-in slash commands ─────────────────────────────────
-	private static readonly BUILTIN_COMMANDS: {name: string; description: string}[] = [
+	static readonly BUILTIN_COMMANDS: {name: string; description: string}[] = [
 		{name: 'clear', description: 'Clear conversation and start fresh'},
 		{name: 'new', description: 'Start a new conversation (keeps history in sidebar)'},
 		{name: 'help', description: 'Show available commands, agents, and prompts'},
@@ -186,6 +208,7 @@ export class SidekickView extends ItemView {
 		{name: 'agent', description: 'Switch agent (e.g. /agent coder)'},
 		{name: 'trigger-debug', description: 'Show trigger diagnostic info'},
 		{name: 'tasks', description: 'Show active and recent tasks'},
+		{name: 'reference', description: 'Show frontmatter property reference for agents, prompts, triggers, and skills'},
 	];
 
 	// ── Session sidebar DOM refs ─────────────────────────────────
@@ -330,7 +353,7 @@ export class SidekickView extends ItemView {
 		}
 	}
 
-	private switchTab(tab: 'chat' | 'triggers' | 'search' | 'tools'): void {
+	switchTab(tab: 'chat' | 'triggers' | 'search' | 'tools'): void {
 		if (tab === this.activeTab) return;
 		this.activeTab = tab;
 
@@ -351,7 +374,7 @@ export class SidekickView extends ItemView {
 		}
 	}
 
-	private renderWelcome(): void {
+	renderWelcome(): void {
 		const welcome = this.chatContainer.createDiv({cls: 'sidekick-welcome'});
 		const icon = welcome.createDiv({cls: 'sidekick-welcome-icon'});
 		setIcon(icon, 'brain');
@@ -362,7 +385,7 @@ export class SidekickView extends ItemView {
 		});
 	}
 
-	private buildInputArea(parent: HTMLElement): void {
+	buildInputArea(parent: HTMLElement): void {
 		const inputArea = parent.createDiv({cls: 'sidekick-input-area'});
 
 		// Attach buttons row above textarea
@@ -383,6 +406,8 @@ export class SidekickView extends ItemView {
 		// Attachments, active note & scope (shown inline after action buttons)
 		this.attachmentsBar = inputActions.createDiv({cls: 'sidekick-attachments-bar'});
 		this.activeNoteBar = inputActions.createDiv({cls: 'sidekick-active-note-bar'});
+		this.triggerTestBar = inputActions.createDiv({cls: 'sidekick-trigger-test-bar is-hidden'});
+		this.agentEditBar = inputActions.createDiv({cls: 'sidekick-agent-edit-bar is-hidden'});
 		this.scopeBar = inputActions.createDiv({cls: 'sidekick-scope-bar'});
 
 		// Row for textarea + send button
@@ -541,7 +566,7 @@ export class SidekickView extends ItemView {
 		});
 	}
 
-	private buildConfigToolbar(parent: HTMLElement): void {
+	buildConfigToolbar(parent: HTMLElement): void {
 		const toolbar = parent.createDiv({cls: 'sidekick-toolbar'});
 
 		// New conversation button
@@ -568,6 +593,9 @@ export class SidekickView extends ItemView {
 			this.selectedModel = this.modelSelect.value;
 			this.configDirty = true;
 			this.updateReasoningBadge();
+		});
+		this.modelSelect.addEventListener('mousedown', () => {
+			if (this.models.length === 0) void this.refreshModels();
 		});
 
 		// Skills button
@@ -634,12 +662,13 @@ export class SidekickView extends ItemView {
 			};
 
 			// Parallel-load all config files (independent I/O)
-			const [agents, skills, mcpServers, prompts, triggers] = await Promise.all([
+			const [agents, skills, mcpServers, prompts, triggers, globalInstructions] = await Promise.all([
 				loadAgents(this.app, getAgentsFolder(this.plugin.settings)),
 				loadSkills(this.app, getSkillsFolder(this.plugin.settings)),
 				loadMcpServers(this.app, getToolsFolder(this.plugin.settings), inputResolver),
 				loadPrompts(this.app, getPromptsFolder(this.plugin.settings)),
 				loadTriggers(this.app, getTriggersFolder(this.plugin.settings)),
+				loadInstructions(this.app, this.plugin.settings.sidekickFolder),
 			]);
 			this.agents = agents;
 			this.skills = skills;
@@ -647,9 +676,12 @@ export class SidekickView extends ItemView {
 			this.mcpServerStatus.clear();
 			this.prompts = prompts;
 			this.triggers = triggers;
+			this.globalInstructions = globalInstructions;
 			this.triggerScheduler?.setTriggers(this.triggers);
 			this.renderTriggerConfigList();
 			this.renderTriggerHistory();
+			this.renderTriggerTestBar();
+			this.renderAgentEditBar();
 
 			// Enable all skills and tools by default (agent filter applied in updateConfigUI)
 			this.enabledSkills = new Set(this.skills.map(s => s.name));
@@ -667,8 +699,8 @@ export class SidekickView extends ItemView {
 				} else if (this.plugin.copilot) {
 					try {
 						this.models = await this.plugin.copilot.listModels();
-					} catch {
-						// silently ignore — models list stays empty
+					} catch (err) {
+						console.warn('Sidekick: failed to load models', err);
 					}
 				}
 			}
@@ -770,19 +802,48 @@ export class SidekickView extends ItemView {
 		}
 	}
 
-	private populateModelSelect(): void {
+	populateModelSelect(): void {
 		this.modelSelect.empty();
+		if (this.models.length === 0) {
+			const placeholder = this.modelSelect.createEl('option', {text: 'No models — click to retry'});
+			placeholder.value = '';
+			placeholder.disabled = true;
+		}
 		for (const model of this.models) {
 			const opt = this.modelSelect.createEl('option', {text: model.name});
 			opt.value = model.id;
 		}
 	}
 
-	private getSelectedModelInfo(): ModelInfo | undefined {
+	async refreshModels(): Promise<void> {
+		const preset = this.plugin.settings.providerPreset;
+		const isByok = preset !== 'github';
+		if (isByok && this.plugin.settings.providerModel) {
+			const id = this.plugin.settings.providerModel;
+			this.models = [{id, name: id} as ModelInfo];
+		} else if (isByok) {
+			return;
+		} else if (this.plugin.copilot) {
+			try {
+				this.models = await this.plugin.copilot.listModels();
+			} catch (err) {
+				console.warn('Sidekick: failed to refresh models', err);
+			}
+		}
+		this.populateModelSelect();
+		if (this.models.length > 0 && this.models[0]) {
+			this.selectedModel = this.models[0].id;
+			this.modelSelect.value = this.selectedModel;
+			this.configDirty = true;
+			this.updateReasoningBadge();
+		}
+	}
+
+	getSelectedModelInfo(): ModelInfo | undefined {
 		return this.models.find(m => m.id === this.selectedModel);
 	}
 
-	private openReasoningMenu(e: MouseEvent): void {
+	openReasoningMenu(e: MouseEvent): void {
 		if (this.currentSession && !this.configDirty) return;
 		const model = this.getSelectedModelInfo();
 		const supported = model?.supportedReasoningEfforts;
@@ -811,7 +872,7 @@ export class SidekickView extends ItemView {
 		menu.showAtMouseEvent(e);
 	}
 
-	private updateReasoningBadge(): void {
+	updateReasoningBadge(): void {
 		const model = this.getSelectedModelInfo();
 		const supportsReasoning = model?.capabilities?.supports?.reasoningEffort && (model.supportedReasoningEfforts?.length ?? 0) > 0;
 		const level = this.plugin.settings.reasoningEffort;
@@ -832,7 +893,7 @@ export class SidekickView extends ItemView {
 		}
 	}
 
-	private openSkillsMenu(e: MouseEvent): void {
+	openSkillsMenu(e: MouseEvent): void {
 		const menu = new Menu();
 		if (this.skills.length === 0) {
 			menu.addItem(item => item.setTitle('No skills configured').setDisabled(true));
@@ -856,7 +917,7 @@ export class SidekickView extends ItemView {
 		menu.showAtMouseEvent(e);
 	}
 
-	private openToolsMenu(e: MouseEvent): void {
+	openToolsMenu(e: MouseEvent): void {
 		const menu = new Menu();
 		if (this.mcpServers.length === 0) {
 			menu.addItem(item => item.setTitle('No tools configured').setDisabled(true));
@@ -911,7 +972,7 @@ export class SidekickView extends ItemView {
 	 * Switch to the named agent: update state, dropdown, model, tools/skills, and mark config dirty.
 	 * No-op if the agent name is not found.
 	 */
-	private selectAgent(agentName: string): void {
+	selectAgent(agentName: string): void {
 		// Handle deselecting (empty = "Auto" / no agent)
 		if (!agentName) {
 			this.selectedAgent = '';
@@ -947,7 +1008,7 @@ export class SidekickView extends ItemView {
 		this.configDirty = true;
 	}
 
-	private applyAgentToolsAndSkills(agent?: AgentConfig): void {
+	applyAgentToolsAndSkills(agent?: AgentConfig): void {
 		// Tools: undefined = enable all, [] = disable all, [...] = enable listed.
 		// Agent names in the tools list are sub-agent references, not MCP servers.
 		if (agent?.tools !== undefined) {
@@ -975,13 +1036,13 @@ export class SidekickView extends ItemView {
 		this.updateToolsBadge();
 	}
 
-	private updateSkillsBadge(): void {
+	updateSkillsBadge(): void {
 		const count = this.enabledSkills.size;
 		this.skillsBtnEl.toggleClass('is-active', count > 0);
 		this.skillsBtnEl.setAttribute('title', count > 0 ? `Skills (${count} active)` : 'Skills');
 	}
 
-	private updateToolsBadge(): void {
+	updateToolsBadge(): void {
 		const count = this.enabledMcpServers.size;
 		this.toolsBtnEl.toggleClass('is-active', count > 0);
 		this.toolsBtnEl.setAttribute('title', count > 0 ? `Tools (${count} active)` : 'Tools');
@@ -989,7 +1050,7 @@ export class SidekickView extends ItemView {
 
 	// ── Attachments & scope ──────────────────────────────────────
 
-	private renderAttachments(): void {
+	renderAttachments(): void {
 		this.attachmentsBar.empty();
 		if (this.attachments.length === 0) {
 			this.attachmentsBar.addClass('is-hidden');
@@ -1070,7 +1131,7 @@ export class SidekickView extends ItemView {
 		this.renderActiveNoteBar();
 	}
 
-	private renderScopeBar(): void {
+	renderScopeBar(): void {
 		this.scopeBar.empty();
 		if (this.scopePaths.length === 0) {
 			this.scopeBar.addClass('is-hidden');
@@ -1105,13 +1166,15 @@ export class SidekickView extends ItemView {
 		});
 	}
 
-	private updateActiveNote(): void {
+	updateActiveNote(): void {
 		const file = this.app.workspace.getActiveFile();
 		this.activeNotePath = file ? file.path : null;
 		// Clear selection when switching files — pollSelection will pick up the new one
 		this.activeSelection = null;
 		this.rebuildSuggestions(true);
 		this.renderActiveNoteBar();
+		this.renderTriggerTestBar();
+		this.renderAgentEditBar();
 
 		// Update working directory to the parent folder of the active note
 		if (file) {
@@ -1129,14 +1192,14 @@ export class SidekickView extends ItemView {
 	 * Poll the active editor for selection changes and update the active note bar.
 	 * Uses a lightweight interval instead of a CM6 extension to avoid coupling.
 	 */
-	private startSelectionPolling(): void {
+	startSelectionPolling(): void {
 		const POLL_MS = 300;
 		const timerId = window.setInterval(() => this.pollSelection(), POLL_MS);
 		this.selectionPollTimer = timerId as unknown as ReturnType<typeof setInterval>;
 		this.registerInterval(timerId);
 	}
 
-	private pollSelection(): void {
+	pollSelection(): void {
 		// Try to get the active MarkdownView. If focus is in our chat view,
 		// fall back to iterating workspace leaves to find the most recent editor.
 		let mdView = this.app.workspace.getActiveViewOfType(MarkdownView);
@@ -1229,7 +1292,7 @@ export class SidekickView extends ItemView {
 		this.renderActiveNoteBar();
 	}
 
-	private rebuildSuggestions(resetDismissed: boolean): void {
+	rebuildSuggestions(resetDismissed: boolean): void {
 		const next: ContextSuggestion[] = [];
 
 		if (this.activeSelection) {
@@ -1274,7 +1337,7 @@ export class SidekickView extends ItemView {
 		this.suggestions = next;
 	}
 
-	private acceptSuggestion(index: number): void {
+	acceptSuggestion(index: number): void {
 		const suggestion = this.suggestions[index];
 		if (!suggestion) return;
 
@@ -1301,14 +1364,14 @@ export class SidekickView extends ItemView {
 		this.renderActiveNoteBar();
 	}
 
-	private dismissSuggestion(index: number): void {
+	dismissSuggestion(index: number): void {
 		const suggestion = this.suggestions[index];
 		if (!suggestion) return;
 		suggestion.dismissed = true;
 		this.renderActiveNoteBar();
 	}
 
-	private toggleCurrentSuggestion(): void {
+	toggleCurrentSuggestion(): void {
 		const idx = this.suggestions.findIndex(s => !s.dismissed);
 		if (idx >= 0) {
 			this.acceptSuggestion(idx);
@@ -1347,7 +1410,7 @@ export class SidekickView extends ItemView {
 		}
 	}
 
-	private renderActiveNoteBar(): void {
+	renderActiveNoteBar(): void {
 		this.activeNoteBar.empty();
 		if (this.suggestions.length === 0) {
 			this.activeNoteBar.addClass('is-hidden');
@@ -1399,7 +1462,92 @@ export class SidekickView extends ItemView {
 		}
 	}
 
-	private handleAttachFile(): void {
+	/**
+	 * Show a "Test trigger" button when the active file is a *.trigger.md inside the triggers folder.
+	 */
+	renderTriggerTestBar(): void {
+		this.triggerTestBar.empty();
+		const trigger = this.getActiveTrigger();
+		if (!trigger) {
+			this.triggerTestBar.addClass('is-hidden');
+			return;
+		}
+
+		this.triggerTestBar.removeClass('is-hidden');
+		const btn = this.triggerTestBar.createEl('button', {
+			cls: 'sidekick-trigger-test-btn',
+			attr: {title: `Test trigger: ${trigger.name}`},
+		});
+		const iconSpan = btn.createSpan({cls: 'sidekick-trigger-test-icon'});
+		setIcon(iconSpan, 'play');
+		btn.createSpan({text: `Test trigger: ${trigger.name}`});
+		btn.addEventListener('click', () => {
+			new Notice(`Testing trigger: ${trigger.name}`);
+			// Send through the foreground chat so the user sees the response
+			if (trigger.agent) {
+				this.selectAgent(trigger.agent);
+			}
+			// Apply trigger-level model override if set
+			if (trigger.model && this.models.some(m => m.id === trigger.model)) {
+				this.selectedModel = trigger.model;
+				this.modelSelect.value = trigger.model;
+			}
+			// Abort any active stream first, then send
+			if (this.isStreaming && this.currentSession) {
+				void this.currentSession.abort();
+			}
+			// Wait a tick for abort to settle, then send
+			setTimeout(() => {
+				this.inputEl.value = trigger.content;
+				this.inputEl.dispatchEvent(new Event('input'));
+				void this.handleSend();
+			}, 100);
+		});
+	}
+
+	/** Return the TriggerConfig for the active file, or null if it isn't a trigger file. */
+	getActiveTrigger(): TriggerConfig | null {
+		if (!this.activeNotePath) return null;
+		const triggersFolder = getTriggersFolder(this.plugin.settings);
+		if (!this.activeNotePath.startsWith(triggersFolder + '/')) return null;
+		if (!this.activeNotePath.endsWith('.trigger.md')) return null;
+		return this.triggers.find(t => t.filePath === this.activeNotePath) ?? null;
+	}
+
+	/**
+	 * Show an "Edit agent" button when the active file is a *.agent.md inside the agents folder.
+	 */
+	renderAgentEditBar(): void {
+		this.agentEditBar.empty();
+		const agent = this.getActiveAgent();
+		if (!agent) {
+			this.agentEditBar.addClass('is-hidden');
+			return;
+		}
+
+		this.agentEditBar.removeClass('is-hidden');
+		const btn = this.agentEditBar.createEl('button', {
+			cls: 'sidekick-agent-edit-bar-btn',
+			attr: {title: `Edit agent: ${agent.name}`},
+		});
+		const iconSpan = btn.createSpan({cls: 'sidekick-agent-edit-bar-icon'});
+		setIcon(iconSpan, 'pencil');
+		btn.createSpan({text: `Edit agent: ${agent.name}`});
+		btn.addEventListener('click', () => {
+			this.openAgentEditor(agent);
+		});
+	}
+
+	/** Return the AgentConfig for the active file, or null if it isn't an agent file. */
+	getActiveAgent(): AgentConfig | null {
+		if (!this.activeNotePath) return null;
+		const agentsFolder = getAgentsFolder(this.plugin.settings);
+		if (!this.activeNotePath.startsWith(agentsFolder + '/')) return null;
+		if (!this.activeNotePath.endsWith('.agent.md')) return null;
+		return this.agents.find(a => a.filePath === this.activeNotePath) ?? null;
+	}
+
+	handleAttachFile(): void {
 		const input = document.createElement('input');
 		input.type = 'file';
 		input.multiple = true;
@@ -1439,7 +1587,7 @@ export class SidekickView extends ItemView {
 		input.click();
 	}
 
-	private async handleClipboard(): Promise<void> {
+	async handleClipboard(): Promise<void> {
 		try {
 			const text = await navigator.clipboard.readText();
 			if (!text.trim()) {
@@ -1454,7 +1602,7 @@ export class SidekickView extends ItemView {
 		}
 	}
 
-	private async handleImagePaste(blob: File): Promise<void> {
+	async handleImagePaste(blob: File): Promise<void> {
 		try {
 			const buffer = await blob.arrayBuffer();
 			const ext = blob.type === 'image/png' ? 'png' : blob.type === 'image/jpeg' ? 'jpg' : 'png';
@@ -1475,7 +1623,7 @@ export class SidekickView extends ItemView {
 	}
 
 	/** Handle files dropped onto the input area from the OS or vault tree. */
-	private handleFileDrop(e: DragEvent): void {
+	handleFileDrop(e: DragEvent): void {
 		const dt = e.dataTransfer;
 		if (!dt) return;
 
@@ -1562,7 +1710,7 @@ export class SidekickView extends ItemView {
 	}
 
 	/** Recursively create a folder path if it doesn't already exist. */
-	private async ensureFolderExists(folderPath: string): Promise<void> {
+	async ensureFolderExists(folderPath: string): Promise<void> {
 		if (this.app.vault.getAbstractFileByPath(folderPath)) return;
 		const parts = folderPath.split('/');
 		let current = '';
@@ -1579,7 +1727,7 @@ export class SidekickView extends ItemView {
 	 * Uses the Obsidian "Attachment folder path" setting + a "sidekick" subfolder.
 	 * Falls back to ".sidekick-attachments" at the vault root.
 	 */
-	private getImageAttachmentFolder(): string {
+	getImageAttachmentFolder(): string {
 		const configured = (this.app.vault as unknown as {getConfig: (key: string) => unknown}).getConfig('attachmentFolderPath') as string | undefined;
 		if (configured && configured !== '/' && configured !== './' && configured !== '.') {
 			// Obsidian attachment folder is set — use a "sidekick" subfolder inside it
@@ -1589,7 +1737,7 @@ export class SidekickView extends ItemView {
 		return '.sidekick-attachments';
 	}
 
-	private openScopeModal(): void {
+	openScopeModal(): void {
 		new VaultScopeModal(this.app, this.scopePaths, (paths) => {
 			this.scopePaths = paths;
 			this.renderScopeBar();
@@ -1598,7 +1746,7 @@ export class SidekickView extends ItemView {
 
 	// ── Prompt slash-command dropdown ─────────────────────────────
 
-	private handlePromptTrigger(): void {
+	handlePromptTrigger(): void {
 		const value = this.inputEl.value;
 		// Trigger only when text starts with "/" (no space before the slash)
 		if (!value.startsWith('/') || value.includes(' ')) {
@@ -1628,7 +1776,7 @@ export class SidekickView extends ItemView {
 		this.showPromptDropdown(combined);
 	}
 
-	private showPromptDropdown(items: Array<{name: string; description?: string; content: string; agent?: string; isBuiltin: boolean}>): void {
+	showPromptDropdown(items: Array<{name: string; description?: string; content: string; agent?: string; isBuiltin: boolean}>): void {
 		this.closePromptDropdown();
 		this.promptDropdown = document.createElement('div');
 		this.promptDropdown.addClass('sidekick-prompt-dropdown');
@@ -1668,7 +1816,7 @@ export class SidekickView extends ItemView {
 		}
 	}
 
-	private closePromptDropdown(): void {
+	closePromptDropdown(): void {
 		if (this.promptDropdown) {
 			this.promptDropdown.remove();
 			this.promptDropdown = null;
@@ -1676,7 +1824,7 @@ export class SidekickView extends ItemView {
 		}
 	}
 
-	private navigatePromptDropdown(direction: number): void {
+	navigatePromptDropdown(direction: number): void {
 		if (!this.promptDropdown) return;
 		const items = this.promptDropdown.querySelectorAll('.sidekick-prompt-item');
 		if (items.length === 0) return;
@@ -1684,7 +1832,7 @@ export class SidekickView extends ItemView {
 		this.updatePromptDropdownSelection();
 	}
 
-	private updatePromptDropdownSelection(): void {
+	updatePromptDropdownSelection(): void {
 		if (!this.promptDropdown) return;
 		const items = this.promptDropdown.querySelectorAll('.sidekick-prompt-item');
 		items.forEach((el, i) => {
@@ -1692,7 +1840,7 @@ export class SidekickView extends ItemView {
 		});
 	}
 
-	private selectPromptFromDropdown(): void {
+	selectPromptFromDropdown(): void {
 		if (!this.promptDropdown) return;
 		const value = this.inputEl.value;
 		const query = value.startsWith('/') ? value.slice(1).toLowerCase() : '';
@@ -1739,7 +1887,7 @@ export class SidekickView extends ItemView {
 
 	// ── Built-in slash commands ──────────────────────────────────
 
-	private executeBuiltinCommand(name: string, arg?: string): void {
+	executeBuiltinCommand(name: string, arg?: string): void {
 		switch (name) {
 			case 'clear':
 				this.newConversation();
@@ -1798,10 +1946,13 @@ export class SidekickView extends ItemView {
 			case 'tasks':
 				this.showTasksOverview();
 				break;
+			case 'reference':
+				void this.showReference();
+				break;
 		}
 	}
 
-	private showHelpInfo(): void {
+	showHelpInfo(): void {
 		const commandLines = SidekickView.BUILTIN_COMMANDS.map(c => `  /${c.name} — ${c.description}`).join('\n');
 		const agentLines = this.agents.length > 0
 			? this.agents.map(a => `  @${a.name} — ${a.description || 'No description'}`).join('\n')
@@ -1828,7 +1979,7 @@ export class SidekickView extends ItemView {
 		this.addInfoMessage(helpText);
 	}
 
-	private showAgentsList(): void {
+	showAgentsList(): void {
 		if (this.agents.length === 0) {
 			this.addInfoMessage('No agents configured. Add .agent.md files to your sidekick agents folder.');
 			return;
@@ -1840,7 +1991,7 @@ export class SidekickView extends ItemView {
 		this.addInfoMessage('**Available agents:**\n' + lines.join('\n') + '\n\nUse @agent-name in your message to delegate, or /agent name to switch.');
 	}
 
-	private showModelsList(): void {
+	showModelsList(): void {
 		if (this.models.length === 0) {
 			this.addInfoMessage('No models available.');
 			return;
@@ -1852,7 +2003,20 @@ export class SidekickView extends ItemView {
 		this.addInfoMessage('**Available models:**\n' + lines.join('\n') + '\n\nUse /model name to switch.');
 	}
 
-	private showTriggerDebug(): void {
+	async showReference(): Promise<void> {
+		const helpPath = normalizePath(`${this.plugin.settings.sidekickFolder}/HELP.md`);
+		const file = this.app.vault.getAbstractFileByPath(helpPath);
+		if (file instanceof TFile) {
+			const content = await this.app.vault.read(file);
+			this.addInfoMessage(content);
+		} else {
+			// Generate in-line if HELP.md doesn't exist yet
+			const {HELP_MD_CONTENT} = await import('./settings');
+			this.addInfoMessage(HELP_MD_CONTENT);
+		}
+	}
+
+	showTriggerDebug(): void {
 		const lines: string[] = ['**Trigger diagnostic:**'];
 
 		// Copilot status
@@ -1902,14 +2066,14 @@ export class SidekickView extends ItemView {
 		this.addInfoMessage(lines.join('\n'));
 	}
 
-	private showTasksOverview(): void {
+	showTasksOverview(): void {
 		const lines: string[] = ['**Active tasks:**'];
 		let hasActive = false;
 
 		// 1. Current foreground session
 		if (this.currentSessionId && this.isStreaming) {
 			const name = this.sessionNames[this.currentSessionId]
-				?.replace(/^\[(chat|inline|trigger|search)\]\s*/, '') || 'Current session';
+				?.replace(/^\[(chat|inline|trigger(?::[a-z0-9-]+)?|search)\]\s*/, '') || 'Current session';
 			lines.push(`  🟢 **${name}** — streaming (foreground)`);
 			hasActive = true;
 		}
@@ -1918,9 +2082,9 @@ export class SidekickView extends ItemView {
 		for (const [id, bg] of this.activeSessions) {
 			if (id === this.currentSessionId) continue; // already shown above
 			const name = this.sessionNames[id]
-				?.replace(/^\[(chat|inline|trigger|search)\]\s*/, '') || `Session ${id.slice(0, 8)}`;
+				?.replace(/^\[(chat|inline|trigger(?::[a-z0-9-]+)?|search)\]\s*/, '') || `Session ${id.slice(0, 8)}`;
 			const rawName = this.sessionNames[id] || '';
-			const type = rawName.startsWith('[trigger]') ? 'trigger'
+			const type = rawName.startsWith('[trigger]') || rawName.startsWith('[trigger:') ? 'trigger'
 				: rawName.startsWith('[search]') ? 'search'
 				: rawName.startsWith('[inline]') ? 'inline' : 'chat';
 			const status = bg.isStreaming ? '🟢 streaming' : '⏸️ idle';
@@ -1940,9 +2104,9 @@ export class SidekickView extends ItemView {
 			for (let i = 0; i < recentCount; i++) {
 				const s = this.sessionList[i]!;
 				const rawName = this.sessionNames[s.sessionId] || '';
-				const displayName = rawName.replace(/^\[(chat|inline|trigger|search)\]\s*/, '')
+				const displayName = rawName.replace(/^\[(chat|inline|trigger(?::[a-z0-9-]+)?|search)\]\s*/, '')
 					|| `Session ${s.sessionId.slice(0, 8)}`;
-				const type = rawName.startsWith('[trigger]') ? '⚡'
+				const type = rawName.startsWith('[trigger]') || rawName.startsWith('[trigger:') ? '⚡'
 					: rawName.startsWith('[search]') ? '🔍'
 					: rawName.startsWith('[inline]') ? '📝' : '💬';
 				const modTime = s.modifiedTime instanceof Date ? s.modifiedTime : new Date(s.modifiedTime);
@@ -1976,7 +2140,7 @@ export class SidekickView extends ItemView {
 
 	// ── @agent mention handling ──────────────────────────────────
 
-	private handleAgentMentionTrigger(): void {
+	handleAgentMentionTrigger(): void {
 		if (this.agents.length === 0) {
 			this.closeAgentDropdown();
 			return;
@@ -2015,7 +2179,7 @@ export class SidekickView extends ItemView {
 		this.showAgentDropdown(filtered);
 	}
 
-	private showAgentDropdown(agents: AgentConfig[]): void {
+	showAgentDropdown(agents: AgentConfig[]): void {
 		this.closeAgentDropdown();
 		this.agentDropdown = document.createElement('div');
 		this.agentDropdown.addClass('sidekick-prompt-dropdown sidekick-agent-dropdown');
@@ -2052,7 +2216,7 @@ export class SidekickView extends ItemView {
 		}
 	}
 
-	private closeAgentDropdown(): void {
+	closeAgentDropdown(): void {
 		if (this.agentDropdown) {
 			this.agentDropdown.remove();
 			this.agentDropdown = null;
@@ -2061,7 +2225,7 @@ export class SidekickView extends ItemView {
 		}
 	}
 
-	private navigateAgentDropdown(direction: number): void {
+	navigateAgentDropdown(direction: number): void {
 		if (!this.agentDropdown) return;
 		const items = this.agentDropdown.querySelectorAll('.sidekick-agent-item');
 		if (items.length === 0) return;
@@ -2069,7 +2233,7 @@ export class SidekickView extends ItemView {
 		this.updateAgentDropdownSelection();
 	}
 
-	private updateAgentDropdownSelection(): void {
+	updateAgentDropdownSelection(): void {
 		if (!this.agentDropdown) return;
 		const items = this.agentDropdown.querySelectorAll('.sidekick-agent-item');
 		items.forEach((el, i) => {
@@ -2077,7 +2241,7 @@ export class SidekickView extends ItemView {
 		});
 	}
 
-	private selectAgentFromDropdown(): void {
+	selectAgentFromDropdown(): void {
 		if (!this.agentDropdown || this.agentMentionStart === -1) return;
 
 		const value = this.inputEl.value;
@@ -2105,7 +2269,7 @@ export class SidekickView extends ItemView {
 
 	// ── Session sidebar ──────────────────────────────────────────
 
-	private buildSessionSidebar(parent: HTMLElement): void {
+	buildSessionSidebar(parent: HTMLElement): void {
 		this.sidebarEl = parent.createDiv({cls: 'sidekick-sidebar'});
 		this.sidebarEl.setCssProps({'--sidebar-width': `${this.sidebarWidth}px`});
 
@@ -2168,7 +2332,7 @@ export class SidekickView extends ItemView {
 		this.sidebarListEl = this.sidebarEl.createDiv({cls: 'sidekick-sidebar-list'});
 	}
 
-	private initSplitter(): void {
+	initSplitter(): void {
 		let startX = 0;
 		let startWidth = 0;
 		let dragging = false;
@@ -2209,7 +2373,7 @@ export class SidekickView extends ItemView {
 		});
 	}
 
-	private async loadSessions(): Promise<void> {
+	async loadSessions(): Promise<void> {
 		if (!this.plugin.copilot) return;
 		try {
 			this.sessionList = await this.plugin.copilot.listSessions();
@@ -2220,7 +2384,7 @@ export class SidekickView extends ItemView {
 		}
 	}
 
-	private sortSessionList(): void {
+	sortSessionList(): void {
 		switch (this.sessionSort) {
 			case 'modified':
 				this.sessionList.sort((a, b) => {
@@ -2246,7 +2410,7 @@ export class SidekickView extends ItemView {
 		}
 	}
 
-	private renderSessionList(): void {
+	renderSessionList(): void {
 		if (!this.sidebarListEl) return;
 		this.sidebarListEl.empty();
 
@@ -2290,7 +2454,7 @@ export class SidekickView extends ItemView {
 	}
 
 	/** Render a single session item into a container. Shared by session list and trigger history. */
-	private renderSessionItem(container: HTMLElement, session: SessionMetadata, opts: {
+	renderSessionItem(container: HTMLElement, session: SessionMetadata, opts: {
 		expanded?: boolean;
 		onClick: () => void;
 		onContextMenu: (e: MouseEvent) => void;
@@ -2328,26 +2492,26 @@ export class SidekickView extends ItemView {
 		item.addEventListener('contextmenu', opts.onContextMenu);
 	}
 
-	private getSessionDisplayName(session: SessionMetadata): string {
+	getSessionDisplayName(session: SessionMetadata): string {
 		const raw = this.sessionNames[session.sessionId]
 			|| session.summary
 			|| `Session ${session.sessionId.slice(0, 8)}`;
 		// Strip session type prefix for display
-		return raw.replace(/^\[(chat|inline|trigger|search)\]\s*/, '');
+		return raw.replace(/^\[(chat|inline|trigger(?::[a-z0-9-]+)?|search)\]\s*/, '');
 	}
 
 	/** Return the session type prefix: 'chat', 'inline', 'trigger', 'search', or 'other'. */
-	private getSessionType(session: SessionMetadata): 'chat' | 'inline' | 'trigger' | 'search' | 'other' {
+	getSessionType(session: SessionMetadata): 'chat' | 'inline' | 'trigger' | 'search' | 'other' {
 		const name = this.sessionNames[session.sessionId] || '';
 		debugTrace(`Sidekick: getSessionType id=${session.sessionId.slice(0, 8)} name="${name.slice(0, 40)}"`);
 		if (name.startsWith('[chat]')) return 'chat';
 		if (name.startsWith('[inline]')) return 'inline';
-		if (name.startsWith('[trigger]')) return 'trigger';
+		if (name.startsWith('[trigger]') || name.startsWith('[trigger:')) return 'trigger';
 		if (name.startsWith('[search]')) return 'search';
 		return 'other';
 	}
 
-	private openSessionFilterMenu(e: MouseEvent): void {
+	openSessionFilterMenu(e: MouseEvent): void {
 		const menu = new Menu();
 		const types: Array<{value: 'chat' | 'inline' | 'trigger' | 'search' | 'other'; label: string}> = [
 			{value: 'chat', label: 'Chat'},
@@ -2383,7 +2547,7 @@ export class SidekickView extends ItemView {
 		menu.showAtMouseEvent(e);
 	}
 
-	private updateFilterBadge(): void {
+	updateFilterBadge(): void {
 		// When no types selected (show all), dim the icon; otherwise mark active
 		const hasFilter = this.sessionTypeFilter.size > 0;
 		this.sidebarFilterEl.toggleClass('is-active', hasFilter);
@@ -2393,7 +2557,7 @@ export class SidekickView extends ItemView {
 				: 'Filter sessions (showing all)');
 	}
 
-	private openSessionSortMenu(e: MouseEvent): void {
+	openSessionSortMenu(e: MouseEvent): void {
 		const menu = new Menu();
 		const sorts: Array<{value: 'modified' | 'created' | 'name'; label: string}> = [
 			{value: 'modified', label: 'Modified date'},
@@ -2415,7 +2579,7 @@ export class SidekickView extends ItemView {
 		menu.showAtMouseEvent(e);
 	}
 
-	private updateSortBadge(): void {
+	updateSortBadge(): void {
 		const labels: Record<string, string> = {modified: 'Modified', created: 'Created', name: 'Name'};
 		this.sidebarSortEl.setAttribute('title', `Sort: ${labels[this.sessionSort]}`);
 	}
@@ -2448,7 +2612,7 @@ export class SidekickView extends ItemView {
 	 * If the session is streaming, events keep routing to the BackgroundSession.
 	 * If idle, the session handle is preserved for quick switching.
 	 */
-	private saveCurrentToBackground(): void {
+	saveCurrentToBackground(): void {
 		if (!this.currentSession || !this.currentSessionId) return;
 
 		// Evict the oldest idle background session if at capacity
@@ -2524,7 +2688,7 @@ export class SidekickView extends ItemView {
 	/**
 	 * Restore a BackgroundSession as the foreground session.
 	 */
-	private async restoreFromBackground(bg: BackgroundSession): Promise<void> {
+	async restoreFromBackground(bg: BackgroundSession): Promise<void> {
 		// Unsubscribe background event routing
 		for (const unsub of bg.unsubscribers) unsub();
 		bg.unsubscribers = [];
@@ -2593,7 +2757,7 @@ export class SidekickView extends ItemView {
 	 * Register event handlers that route session events into a BackgroundSession
 	 * object while the session is not being viewed.
 	 */
-	private registerBackgroundEvents(bg: BackgroundSession): void {
+	registerBackgroundEvents(bg: BackgroundSession): void {
 		const session = bg.session;
 
 		bg.unsubscribers.push(
@@ -2686,7 +2850,7 @@ export class SidekickView extends ItemView {
 	/**
 	 * Restore the agent and model dropdowns from a session's saved name.
 	 */
-	private restoreAgentFromSessionName(sessionId: string): void {
+	restoreAgentFromSessionName(sessionId: string): void {
 		let sessionName = this.sessionNames[sessionId] || '';
 		// Strip session type prefix
 		sessionName = sessionName.replace(/^\[(chat|inline|trigger)\]\s*/, '');
@@ -2699,7 +2863,7 @@ export class SidekickView extends ItemView {
 		}
 	}
 
-	private async selectSession(sessionId: string): Promise<void> {
+	async selectSession(sessionId: string): Promise<void> {
 		if (sessionId === this.currentSessionId && this.currentSession) return;
 
 		// ── Save current session to background (if streaming, keep it alive) ──
@@ -2794,7 +2958,7 @@ export class SidekickView extends ItemView {
 		}
 	}
 
-	private showSessionContextMenu(e: MouseEvent, sessionId: string): void {
+	showSessionContextMenu(e: MouseEvent, sessionId: string): void {
 		e.preventDefault();
 		e.stopPropagation();
 		const menu = new Menu();
@@ -2812,7 +2976,7 @@ export class SidekickView extends ItemView {
 		menu.showAtMouseEvent(e);
 	}
 
-	private renameSession(sessionId: string): void {
+	renameSession(sessionId: string): void {
 		const rawName = this.sessionNames[sessionId] || '';
 		// Extract prefix and display name
 		const prefixMatch = rawName.match(/^(\[(chat|inline|trigger)\]\s*)/);
@@ -2857,7 +3021,7 @@ export class SidekickView extends ItemView {
 		input.select();
 	}
 
-	private async deleteSessionById(sessionId: string): Promise<void> {
+	async deleteSessionById(sessionId: string): Promise<void> {
 		// Clean up background session if it exists
 		const bg = this.activeSessions.get(sessionId);
 		if (bg) {
@@ -2890,7 +3054,7 @@ export class SidekickView extends ItemView {
 		new Notice('Session deleted.');
 	}
 
-	private confirmDeleteDisplayedSessions(): void {
+	confirmDeleteDisplayedSessions(): void {
 		const displayed = this.getDisplayedSessions();
 		if (displayed.length === 0) {
 			new Notice('No sessions to delete.');
@@ -2912,7 +3076,7 @@ export class SidekickView extends ItemView {
 		modal.open();
 	}
 
-	private getDisplayedSessions(): SessionMetadata[] {
+	getDisplayedSessions(): SessionMetadata[] {
 		return this.sessionList.filter(session => {
 			if (this.sessionTypeFilter.size > 0) {
 				const type = this.getSessionType(session);
@@ -2926,7 +3090,7 @@ export class SidekickView extends ItemView {
 		});
 	}
 
-	private async deleteDisplayedSessions(sessions: SessionMetadata[]): Promise<void> {
+	async deleteDisplayedSessions(sessions: SessionMetadata[]): Promise<void> {
 		let deleted = 0;
 		for (const session of sessions) {
 			try {
@@ -2937,12 +3101,12 @@ export class SidekickView extends ItemView {
 		new Notice(`Deleted ${deleted} session${deleted === 1 ? '' : 's'}.`);
 	}
 
-	private saveSessionNames(): void {
+	saveSessionNames(): void {
 		this.plugin.settings.sessionNames = {...this.sessionNames};
 		void this.plugin.saveSettings();
 	}
 
-	private formatTimeAgo(d: Date): string {
+	formatTimeAgo(d: Date): string {
 		const now = Date.now();
 		const diff = now - d.getTime();
 		const minutes = Math.floor(diff / 60000);
@@ -2959,7 +3123,7 @@ export class SidekickView extends ItemView {
 
 	// ── Tools panel ─────────────────────────────────────────────
 
-	private buildToolsPanel(parent: HTMLElement): void {
+	buildToolsPanel(parent: HTMLElement): void {
 		const wrapper = parent.createDiv({cls: 'sidekick-tools-wrapper'});
 
 		// ── MCP servers section ──────────────────────────────
@@ -2972,6 +3136,17 @@ export class SidekickView extends ItemView {
 			text: `${this.plugin.settings.sidekickFolder}/tools/mcp.json`,
 		});
 		mcpPathEl.setAttribute('title', 'MCP configuration file');
+		const editBtn = mcpControls.createEl('button', {
+			cls: 'clickable-icon sidekick-triggers-ctrl-btn',
+			attr: {title: 'Edit mcp.json'},
+		});
+		setIcon(editBtn, 'pencil');
+		editBtn.addEventListener('click', () => {
+			const toolsFolder = getToolsFolder(this.plugin.settings);
+			new McpEditorModal(this.app, toolsFolder, () => {
+				void this.loadAllConfigs({silent: true}).then(() => this.renderToolsPanel());
+			}).open();
+		});
 		const refreshBtn = mcpControls.createEl('button', {
 			cls: 'clickable-icon sidekick-triggers-ctrl-btn',
 			attr: {title: 'Refresh'},
@@ -2986,15 +3161,19 @@ export class SidekickView extends ItemView {
 		const agentSection = wrapper.createDiv({cls: 'sidekick-tools-section'});
 		const agentHeader = agentSection.createDiv({cls: 'sidekick-tools-header'});
 		agentHeader.createDiv({cls: 'sidekick-tools-title', text: 'Agent tool access'});
+		const agentControls = agentHeader.createDiv({cls: 'sidekick-tools-controls'});
+		const newAgentBtn = agentControls.createEl('button', {cls: 'clickable-icon sidekick-triggers-ctrl-btn', attr: {title: 'New agent'}});
+		setIcon(newAgentBtn, 'plus');
+		newAgentBtn.addEventListener('click', () => this.openAgentEditor());
 		this.toolsAgentListEl = agentSection.createDiv({cls: 'sidekick-tools-list'});
 	}
 
-	private renderToolsPanel(): void {
+	renderToolsPanel(): void {
 		this.renderMcpServersList();
 		this.renderAgentToolMappings();
 	}
 
-	private renderMcpServersList(): void {
+	renderMcpServersList(): void {
 		this.toolsMcpListEl.empty();
 
 		if (this.mcpServers.length === 0) {
@@ -3066,16 +3245,24 @@ export class SidekickView extends ItemView {
 				toolsTag.setAttribute('title', tools.join(', '));
 			}
 
-			// Toggle
-			const toggle = item.createDiv({cls: 'sidekick-tools-toggle'});
-			const checkbox = toggle.createEl('input', {type: 'checkbox', cls: 'checkbox-container'});
+			// Toggle — use Obsidian's native toggle structure
+			const toggleContainer = item.createDiv({cls: 'checkbox-container sidekick-tools-toggle'});
+			toggleContainer.toggleClass('is-enabled', enabled);
+			const checkbox = toggleContainer.createEl('input', {type: 'checkbox'});
 			checkbox.checked = enabled;
+			checkbox.tabIndex = 0;
+			toggleContainer.addEventListener('click', (e) => {
+				if (e.target === checkbox) return;
+				checkbox.checked = !checkbox.checked;
+				checkbox.dispatchEvent(new Event('change'));
+			});
 			checkbox.addEventListener('change', () => {
 				if (checkbox.checked) {
 					this.enabledMcpServers.add(server.name);
 				} else {
 					this.enabledMcpServers.delete(server.name);
 				}
+				toggleContainer.toggleClass('is-enabled', checkbox.checked);
 				this.configDirty = true;
 				this.updateToolsBadge();
 				this.renderMcpServersList();
@@ -3084,7 +3271,7 @@ export class SidekickView extends ItemView {
 		}
 	}
 
-	private renderAgentToolMappings(): void {
+	renderAgentToolMappings(): void {
 		this.toolsAgentListEl.empty();
 
 		if (this.agents.length === 0) {
@@ -3101,9 +3288,15 @@ export class SidekickView extends ItemView {
 			setIcon(iconEl, 'bot');
 			header.createSpan({cls: 'sidekick-tools-agent-name', text: agent.name});
 
+			// Edit button
+			const editBtn = header.createEl('button', {cls: 'clickable-icon sidekick-tools-agent-edit', attr: {title: 'Edit agent'}});
+			setIcon(editBtn, 'pencil');
+			editBtn.addEventListener('click', (e) => { e.stopPropagation(); this.openAgentEditor(agent); });
+
 			if (agent.description) {
-				const desc = header.createSpan({cls: 'sidekick-tools-agent-desc'});
+				const desc = item.createDiv({cls: 'sidekick-tools-agent-desc'});
 				desc.setText(agent.description);
+				desc.setAttribute('title', agent.description);
 			}
 
 			const toolsList = item.createDiv({cls: 'sidekick-tools-agent-tools'});
@@ -3150,7 +3343,7 @@ export class SidekickView extends ItemView {
 	 * Handle session.info and session.warning events related to MCP servers.
 	 * Updates mcpServerStatus map and refreshes the Tools panel if visible.
 	 */
-	private handleMcpSessionEvent(category: string, message: string, level: 'info' | 'warning'): void {
+	handleMcpSessionEvent(category: string, message: string, level: 'info' | 'warning'): void {
 		if (category !== 'mcp') return;
 
 		// Parse server name from typical MCP messages like "MCP server 'name': connected"
@@ -3185,7 +3378,7 @@ export class SidekickView extends ItemView {
 
 	// ── Search panel ────────────────────────────────────────────
 
-	private buildSearchPanel(parent: HTMLElement): void {
+	buildSearchPanel(parent: HTMLElement): void {
 		const wrapper = parent.createDiv({cls: 'sidekick-search-wrapper'});
 
 		// ── Toolbar row: scope | mode toggle | [advanced: agent | model | skills | tools] ──
@@ -3270,11 +3463,11 @@ export class SidekickView extends ItemView {
 		this.searchResultsEl = wrapper.createDiv({cls: 'sidekick-search-results'});
 	}
 
-	private get searchMode(): 'basic' | 'advanced' {
+	get searchMode(): 'basic' | 'advanced' {
 		return this.plugin.settings.searchMode;
 	}
 
-	private toggleSearchMode(): void {
+	toggleSearchMode(): void {
 		const newMode = this.searchMode === 'basic' ? 'advanced' : 'basic';
 		this.plugin.settings.searchMode = newMode;
 		void this.plugin.saveSettings();
@@ -3287,7 +3480,7 @@ export class SidekickView extends ItemView {
 		}
 	}
 
-	private updateSearchModeToggle(): void {
+	updateSearchModeToggle(): void {
 		this.searchModeToggleEl.empty();
 		if (this.searchMode === 'basic') {
 			setIcon(this.searchModeToggleEl, 'settings');
@@ -3299,11 +3492,11 @@ export class SidekickView extends ItemView {
 		this.searchModeToggleEl.toggleClass('is-active', this.searchMode === 'advanced');
 	}
 
-	private updateSearchAdvancedVisibility(): void {
+	updateSearchAdvancedVisibility(): void {
 		this.searchAdvancedToolbarEl.toggleClass('is-hidden', this.searchMode !== 'advanced');
 	}
 
-	private updateSearchConfigUI(): void {
+	updateSearchConfigUI(): void {
 		// Agents
 		this.searchAgentSelect.empty();
 		const noAgent = this.searchAgentSelect.createEl('option', {text: 'Agent', attr: {value: ''}});
@@ -3347,7 +3540,7 @@ export class SidekickView extends ItemView {
 		this.applySearchAgentToolsAndSkills(agentConfig);
 	}
 
-	private applySearchAgentToolsAndSkills(agent?: AgentConfig): void {
+	applySearchAgentToolsAndSkills(agent?: AgentConfig): void {
 		// Tools: undefined = enable all, [] = disable all, [...] = enable listed.
 		// Agent names in the tools list are sub-agent references, not MCP servers.
 		if (agent?.tools !== undefined) {
@@ -3375,7 +3568,7 @@ export class SidekickView extends ItemView {
 		this.updateSearchToolsBadge();
 	}
 
-	private openSearchSkillsMenu(e: MouseEvent): void {
+	openSearchSkillsMenu(e: MouseEvent): void {
 		const menu = new Menu();
 		if (this.skills.length === 0) {
 			menu.addItem(item => item.setTitle('No skills configured').setDisabled(true));
@@ -3398,7 +3591,7 @@ export class SidekickView extends ItemView {
 		menu.showAtMouseEvent(e);
 	}
 
-	private openSearchToolsMenu(e: MouseEvent): void {
+	openSearchToolsMenu(e: MouseEvent): void {
 		const menu = new Menu();
 		if (this.mcpServers.length === 0) {
 			menu.addItem(item => item.setTitle('No tools configured').setDisabled(true));
@@ -3421,26 +3614,26 @@ export class SidekickView extends ItemView {
 		menu.showAtMouseEvent(e);
 	}
 
-	private updateSearchSkillsBadge(): void {
+	updateSearchSkillsBadge(): void {
 		const count = this.searchEnabledSkills.size;
 		this.searchSkillsBtnEl.toggleClass('is-active', count > 0);
 		this.searchSkillsBtnEl.setAttribute('title', count > 0 ? `Skills (${count} active)` : 'Skills');
 	}
 
-	private updateSearchToolsBadge(): void {
+	updateSearchToolsBadge(): void {
 		const count = this.searchEnabledMcpServers.size;
 		this.searchToolsBtnEl.toggleClass('is-active', count > 0);
 		this.searchToolsBtnEl.setAttribute('title', count > 0 ? `Tools (${count} active)` : 'Tools');
 	}
 
-	private openSearchScopePicker(): void {
+	openSearchScopePicker(): void {
 		new FolderTreeModal(this.app, this.searchWorkingDir, (folder) => {
 			this.searchWorkingDir = folder.path;
 			this.updateSearchCwdButton();
 		}).open();
 	}
 
-	private updateSearchCwdButton(): void {
+	updateSearchCwdButton(): void {
 		const vaultName = this.app.vault.getName();
 		const label = this.searchWorkingDir
 			? `Search scope: ${vaultName}/${this.searchWorkingDir}`
@@ -3449,13 +3642,13 @@ export class SidekickView extends ItemView {
 		this.searchCwdBtnEl.toggleClass('is-active', !!this.searchWorkingDir);
 	}
 
-	private getSearchWorkingDirectory(): string {
+	getSearchWorkingDirectory(): string {
 		const base = this.getVaultBasePath();
 		if (!this.searchWorkingDir) return base;
 		return base + '/' + normalizePath(this.searchWorkingDir);
 	}
 
-	private buildSearchSessionConfig(): SessionConfig {
+	buildSearchSessionConfig(): SessionConfig {
 		const basePath = this.getVaultBasePath();
 
 		// MCP servers (search-specific selection)
@@ -3511,11 +3704,17 @@ export class SidekickView extends ItemView {
 				if (Object.keys(scoped).length > 0) agentMcpServers = scoped;
 			}
 			let prompt = a.instructions;
-			const subAgents = this.agents.filter(ag => ag.name !== a.name);
+			const subAgents = this.agents.filter(ag => {
+				if (ag.name === a.name) return false;
+				if (a.handoffs !== undefined) return a.handoffs.some(h => h.agent === ag.name);
+				return true;
+			});
 			if (subAgents.length > 0) {
-				const agentDescs = subAgents.map(ag =>
-					ag.description ? `- **${ag.name}**: ${ag.description}` : `- **${ag.name}**`
-				).join('\n');
+				const agentDescs = subAgents.map(ag => {
+					const handoff = a.handoffs?.find(h => h.agent === ag.name);
+					const base = ag.description ? `- **${ag.name}**: ${ag.description}` : `- **${ag.name}**`;
+					return handoff?.prompt ? `${base}\n  Handoff instructions: ${handoff.prompt}` : base;
+				}).join('\n');
 				prompt += `\n\nYou can delegate tasks to the following sub-agents by invoking them as tools:\n${agentDescs}`;
 			}
 			return {
@@ -3556,15 +3755,20 @@ export class SidekickView extends ItemView {
 			};
 		}
 
-		// Build system message with MCP tool guidance for search sessions
+		// Build system message: global instructions + MCP tool guidance for search sessions
 		const mcpServerNames = Object.keys(mcpServers);
-		let searchSystemContent: string | undefined;
+		const searchSystemParts: string[] = [];
+		if (this.globalInstructions) {
+			searchSystemParts.push(this.globalInstructions);
+		}
 		if (mcpServerNames.length > 0) {
-			searchSystemContent =
+			searchSystemParts.push(
 				'You have access to MCP tool servers: ' + mcpServerNames.join(', ') + '.\n' +
 				'Prefer using MCP tools over shell commands or direct file reads when the MCP servers provide equivalent functionality. ' +
-				'Only fall back to shell commands when no MCP tool can accomplish the task.';
+				'Only fall back to shell commands when no MCP tool can accomplish the task.'
+			);
 		}
+		const searchSystemContent = searchSystemParts.length > 0 ? searchSystemParts.join('\n\n') : undefined;
 
 		debugTrace('buildSearchSessionConfig', {
 			mcpServerCount: mcpServerNames.length,
@@ -3587,7 +3791,7 @@ export class SidekickView extends ItemView {
 		};
 	}
 
-	private async handleSearch(): Promise<void> {
+	async handleSearch(): Promise<void> {
 		if (this.isSearching) {
 			// Cancel in-progress search
 			const session = this.searchMode === 'basic' ? this.basicSearchSession : this.searchSession;
@@ -3633,7 +3837,7 @@ export class SidekickView extends ItemView {
 		}
 	}
 
-	private async handleBasicSearch(query: string): Promise<void> {
+	async handleBasicSearch(query: string): Promise<void> {
 		// Check cache first
 		const scopePath = this.getSearchWorkingDirectory();
 		const cacheKey = this.buildSearchCacheKey(query, 'basic', [scopePath]);
@@ -3701,7 +3905,7 @@ export class SidekickView extends ItemView {
 		}
 	}
 
-	private async handleAdvancedSearch(query: string): Promise<void> {
+	async handleAdvancedSearch(query: string): Promise<void> {
 		// Check cache first
 		const scopePath = this.getSearchWorkingDirectory();
 		const agentKey = this.searchAgent || undefined;
@@ -3762,7 +3966,7 @@ export class SidekickView extends ItemView {
 	}
 
 	/** Minimal session config for basic search — no MCP servers, skills, or custom agents. */
-	private buildBasicSearchSessionConfig(): SessionConfig {
+	buildBasicSearchSessionConfig(): SessionConfig {
 		const permissionHandler = (request: PermissionRequest) => {
 			if (this.plugin.settings.toolApproval === 'allow') {
 				return approveAll(request, {sessionId: ''});
@@ -3804,7 +4008,7 @@ export class SidekickView extends ItemView {
 		};
 	}
 
-	private renderSearchResults(content: string, fromCache = false): void {
+	renderSearchResults(content: string, fromCache = false): void {
 		this.searchResultsEl.empty();
 
 		if (fromCache) {
@@ -3864,7 +4068,7 @@ export class SidekickView extends ItemView {
 
 	// ── Search cache helpers ─────────────────────────────────────
 
-	private buildSearchCacheKey(query: string, mode: 'basic' | 'advanced', scopePaths: string[], agent?: string): string {
+	buildSearchCacheKey(query: string, mode: 'basic' | 'advanced', scopePaths: string[], agent?: string): string {
 		const normalized = [
 			query.trim().toLowerCase(),
 			mode,
@@ -3878,7 +4082,7 @@ export class SidekickView extends ItemView {
 		return hash.toString(36);
 	}
 
-	private addToSearchCache(key: string, entry: {content: string; cachedAt: number; scopePaths: string[]; mode: 'basic' | 'advanced'; agent?: string}): void {
+	addToSearchCache(key: string, entry: {content: string; cachedAt: number; scopePaths: string[]; mode: 'basic' | 'advanced'; agent?: string}): void {
 		if (this.searchCache.size >= SidekickView.SEARCH_CACHE_MAX) {
 			let oldestKey = '';
 			let oldestTime = Infinity;
@@ -3893,13 +4097,13 @@ export class SidekickView extends ItemView {
 		this.searchCache.set(key, entry);
 	}
 
-	private invalidateSearchCache(): void {
+	invalidateSearchCache(): void {
 		if (this.searchCache.size > 0) {
 			this.searchCache.clear();
 		}
 	}
 
-	private updateSearchButton(): void {
+	updateSearchButton(): void {
 		this.searchBtnEl.empty();
 		if (this.isSearching) {
 			setIcon(this.searchBtnEl, 'square');
@@ -3912,1018 +4116,9 @@ export class SidekickView extends ItemView {
 		}
 	}
 
-	// ── Triggers panel ──────────────────────────────────────────
-
-	private buildTriggersPanel(parent: HTMLElement): void {
-		// ── History section (top) ─────────────────────────────
-		const historySection = parent.createDiv({cls: 'sidekick-triggers-section sidekick-triggers-history-section'});
-		const historyHeader = historySection.createDiv({cls: 'sidekick-triggers-header'});
-		historyHeader.createDiv({cls: 'sidekick-triggers-title', text: 'History'});
-
-		const historyControls = historyHeader.createDiv({cls: 'sidekick-triggers-controls'});
-
-		// Filter by name
-		const historySearchEl = historyControls.createEl('input', {
-			type: 'text',
-			placeholder: 'Filter…',
-			cls: 'sidekick-triggers-search',
-		});
-		historySearchEl.addEventListener('input', () => {
-			this.triggerHistoryFilter = historySearchEl.value.toLowerCase();
-			this.renderTriggerHistory();
-		});
-
-		// Filter by agent
-		const agentFilterBtn = historyControls.createEl('button', {
-			cls: 'clickable-icon sidekick-triggers-ctrl-btn',
-			attr: {title: 'Filter by agent'},
-		});
-		setIcon(agentFilterBtn, 'user');
-		agentFilterBtn.addEventListener('click', (e) => {
-			const menu = new Menu();
-			const agents = new Set<string>();
-			for (const s of this.sessionList) {
-				if (this.getSessionType(s) === 'trigger') {
-					agents.add(this.parseTriggerAgent(s));
-				}
-			}
-			menu.addItem(item => item.setTitle('All agents')
-				.setChecked(!this.triggerHistoryAgentFilter)
-				.onClick(() => {
-					this.triggerHistoryAgentFilter = '';
-					this.renderTriggerHistory();
-				}));
-			for (const agent of agents) {
-				menu.addItem(item => item.setTitle(agent)
-					.setChecked(this.triggerHistoryAgentFilter === agent)
-					.onClick(() => {
-						this.triggerHistoryAgentFilter = agent;
-						this.renderTriggerHistory();
-					}));
-			}
-			menu.showAtMouseEvent(e);
-		});
-
-		// Sort
-		const historySortBtn = historyControls.createEl('button', {
-			cls: 'clickable-icon sidekick-triggers-ctrl-btn',
-			attr: {title: 'Sort history'},
-		});
-		setIcon(historySortBtn, 'arrow-up-down');
-		historySortBtn.addEventListener('click', (e) => {
-			const menu = new Menu();
-			menu.addItem(item => item.setTitle('Execution date')
-				.setChecked(this.triggerHistorySort === 'date')
-				.onClick(() => { this.triggerHistorySort = 'date'; this.renderTriggerHistory(); }));
-			menu.addItem(item => item.setTitle('Name')
-				.setChecked(this.triggerHistorySort === 'name')
-				.onClick(() => { this.triggerHistorySort = 'name'; this.renderTriggerHistory(); }));
-			menu.showAtMouseEvent(e);
-		});
-
-		this.triggerHistoryListEl = historySection.createDiv({cls: 'sidekick-triggers-list'});
-
-		// ── Configured triggers section (bottom) ──────────────
-		const configSection = parent.createDiv({cls: 'sidekick-triggers-section sidekick-triggers-config-section'});
-		const configHeader = configSection.createDiv({cls: 'sidekick-triggers-header'});
-		configHeader.createDiv({cls: 'sidekick-triggers-title', text: 'Configured triggers'});
-
-		const configControls = configHeader.createDiv({cls: 'sidekick-triggers-controls'});
-
-		// New trigger button
-		const newTriggerBtn = configControls.createEl('button', {
-			cls: 'clickable-icon sidekick-triggers-ctrl-btn',
-			attr: {title: 'New trigger'},
-		});
-		setIcon(newTriggerBtn, 'plus');
-		newTriggerBtn.addEventListener('click', () => {
-			const modal = new NewTriggerModal(
-				this.app,
-				this.agents,
-				getTriggersFolder(this.plugin.settings),
-				() => void this.loadAllConfigs({silent: true}),
-			);
-			modal.open();
-		});
-
-		// Sort
-		const configSortBtn = configControls.createEl('button', {
-			cls: 'clickable-icon sidekick-triggers-ctrl-btn',
-			attr: {title: 'Sort triggers'},
-		});
-		setIcon(configSortBtn, 'arrow-up-down');
-		configSortBtn.addEventListener('click', (e) => {
-			const menu = new Menu();
-			menu.addItem(item => item.setTitle('Name')
-				.setChecked(this.triggerConfigSort === 'name')
-				.onClick(() => { this.triggerConfigSort = 'name'; this.renderTriggerConfigList(); }));
-			menu.addItem(item => item.setTitle('Modified date')
-				.setChecked(this.triggerConfigSort === 'modified')
-				.onClick(() => { this.triggerConfigSort = 'modified'; this.renderTriggerConfigList(); }));
-			menu.showAtMouseEvent(e);
-		});
-
-		this.triggerConfigListEl = configSection.createDiv({cls: 'sidekick-triggers-list'});
-	}
-
-	private renderTriggerHistory(): void {
-		if (!this.triggerHistoryListEl) return;
-		this.triggerHistoryListEl.empty();
-
-		// Derive trigger history from session list — sessions with [trigger] prefix
-		let items = this.sessionList.filter(s => this.getSessionType(s) === 'trigger');
-
-		// Filter by name/agent text
-		if (this.triggerHistoryFilter) {
-			items = items.filter(s => {
-				const name = this.getSessionDisplayName(s).toLowerCase();
-				return name.includes(this.triggerHistoryFilter);
-			});
-		}
-
-		// Filter by agent
-		if (this.triggerHistoryAgentFilter) {
-			items = items.filter(s => {
-				const agent = this.parseTriggerAgent(s);
-				return agent === this.triggerHistoryAgentFilter;
-			});
-		}
-
-		// Sort
-		if (this.triggerHistorySort === 'date') {
-			items.sort((a, b) => {
-				const ta = a.modifiedTime instanceof Date ? a.modifiedTime.getTime() : new Date(a.modifiedTime).getTime();
-				const tb = b.modifiedTime instanceof Date ? b.modifiedTime.getTime() : new Date(b.modifiedTime).getTime();
-				return tb - ta;
-			});
-		} else {
-			items.sort((a, b) => this.getSessionDisplayName(a).localeCompare(this.getSessionDisplayName(b)));
-		}
-
-		if (items.length === 0) {
-			this.triggerHistoryListEl.createDiv({cls: 'sidekick-triggers-empty', text: 'No trigger history yet.'});
-			return;
-		}
-
-		for (const session of items) {
-			this.renderSessionItem(this.triggerHistoryListEl, session, {
-				onClick: () => { void this.selectSession(session.sessionId); this.switchTab('chat'); },
-				onContextMenu: (e) => this.showTriggerHistoryContextMenu(e, session.sessionId),
-			});
-		}
-	}
-
-	/** Parse agent name from a trigger session name. Format: "[trigger] Agent: content" */
-	private parseTriggerAgent(session: SessionMetadata): string {
-		const raw = this.sessionNames[session.sessionId] || '';
-		const m = raw.match(/^\[trigger\]\s*([^:]+?):\s/);
-		return m ? m[1]!.trim() : 'Chat';
-	}
-
-	private showTriggerHistoryContextMenu(e: MouseEvent, sessionId: string): void {
-		e.preventDefault();
-		e.stopPropagation();
-		const menu = new Menu();
-
-		menu.addItem(item => item
-			.setTitle('Open session')
-			.setIcon('message-square')
-			.onClick(() => {
-				void this.selectSession(sessionId);
-				this.switchTab('chat');
-			}));
-
-		menu.addItem(item => item
-			.setTitle('Rename')
-			.setIcon('pencil')
-			.onClick(() => this.renameSession(sessionId)));
-
-		menu.addItem(item => item
-			.setTitle('Delete')
-			.setIcon('trash-2')
-			.onClick(() => void this.deleteSessionById(sessionId)));
-
-		menu.showAtMouseEvent(e);
-	}
-
-	private static describeCron(cron: string): string {
-		const parts = cron.trim().split(/\s+/);
-		if (parts.length !== 5) return `Cron: ${cron}`;
-		const [min, hour, dom, mon, dow] = parts;
-
-		// */N minute patterns
-		const everyMin = min!.match(/^\*\/(\d+)$/);
-		if (everyMin && hour === '*' && dom === '*' && mon === '*' && dow === '*') {
-			return `Every ${everyMin[1]} minute(s)`;
-		}
-		// Daily at HH:MM
-		if (/^\d+$/.test(min!) && /^\d+$/.test(hour!) && dom === '*' && mon === '*' && dow === '*') {
-			return `Daily at ${hour!.padStart(2, '0')}:${min!.padStart(2, '0')}`;
-		}
-		// Weekly (specific dow)
-		if (/^\d+$/.test(min!) && /^\d+$/.test(hour!) && dom === '*' && mon === '*' && /^\d+$/.test(dow!)) {
-			const days = ['Sun', 'Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat'];
-			const day = days[parseInt(dow!, 10)] ?? dow;
-			return `Weekly on ${day} at ${hour!.padStart(2, '0')}:${min!.padStart(2, '0')}`;
-		}
-		// Hourly at :MM
-		if (/^\d+$/.test(min!) && hour === '*' && dom === '*' && mon === '*' && dow === '*') {
-			return `Hourly at :${min!.padStart(2, '0')}`;
-		}
-		return `Cron: ${cron}`;
-	}
-
-	private static describeGlob(glob: string): string {
-		// **/*.ext — all .ext files recursively
-		const recursiveExt = glob.match(/^\*\*\/\*\.([\w]+)$/);
-		if (recursiveExt) return `All .${recursiveExt[1]} files (recursive)`;
-		// *.ext — .ext files in root
-		const rootExt = glob.match(/^\*\.([\w]+)$/);
-		if (rootExt) return `.${rootExt[1]} files in root`;
-		// folder/**/*.ext
-		const folderExt = glob.match(/^(.+)\/\*\*\/\*\.([\w]+)$/);
-		if (folderExt) return `All .${folderExt[2]} files in ${folderExt[1]}/`;
-		// folder/** — everything under folder
-		const folderAll = glob.match(/^(.+)\/\*\*$/);
-		if (folderAll) return `All files in ${folderAll[1]}/`;
-		return `Glob: ${glob}`;
-	}
-
-	/** Simple line-level diff for trigger context (no external dependency). */
-	private static computeSimpleDiff(before: string, after: string): string {
-		const beforeLines = before.split('\n');
-		const afterLines = after.split('\n');
-
-		const added: string[] = [];
-		const removed: string[] = [];
-
-		const beforeSet = new Set(beforeLines);
-		const afterSet = new Set(afterLines);
-
-		for (const line of afterLines) {
-			if (!beforeSet.has(line) && line.trim()) {
-				added.push(`+ ${line}`);
-			}
-		}
-		for (const line of beforeLines) {
-			if (!afterSet.has(line) && line.trim()) {
-				removed.push(`- ${line}`);
-			}
-		}
-
-		if (added.length === 0 && removed.length === 0) return '';
-
-		const parts: string[] = [];
-		if (added.length > 0) parts.push('Added:\n' + added.slice(0, 20).join('\n'));
-		if (removed.length > 0) parts.push('Removed:\n' + removed.slice(0, 20).join('\n'));
-		return parts.join('\n\n');
-	}
-
-	private renderTriggerConfigList(): void {
-		if (!this.triggerConfigListEl) return;
-		this.triggerConfigListEl.empty();
-
-		const items = [...this.triggers];
-
-		// Sort
-		if (this.triggerConfigSort === 'name') {
-			items.sort((a, b) => a.name.localeCompare(b.name));
-		} else {
-			// Sort by file modified date
-			items.sort((a, b) => {
-				const fileA = this.app.vault.getAbstractFileByPath(a.filePath);
-				const fileB = this.app.vault.getAbstractFileByPath(b.filePath);
-				const mtimeA = (fileA instanceof TFile) ? fileA.stat.mtime : 0;
-				const mtimeB = (fileB instanceof TFile) ? fileB.stat.mtime : 0;
-				return mtimeB - mtimeA;
-			});
-		}
-
-		if (items.length === 0) {
-			this.triggerConfigListEl.createDiv({cls: 'sidekick-triggers-empty', text: 'No triggers configured.'});
-			return;
-		}
-
-		for (const trigger of items) {
-			const item = this.triggerConfigListEl.createDiv({cls: 'sidekick-session-item sidekick-triggers-config-item'});
-			if (!trigger.enabled) item.addClass('is-disabled');
-
-			// Icon with enabled/disabled dot (mirrors session list icon pattern)
-			const iconEl = item.createSpan({cls: 'sidekick-session-icon'});
-			setIcon(iconEl, 'zap');
-			if (trigger.enabled) {
-				iconEl.createSpan({cls: 'sidekick-triggers-enabled-dot'});
-			}
-
-			// Details: name + schedule description (mirrors session list)
-			const agentName = trigger.agent || 'Chat';
-			const displayName = `${agentName}: ${trigger.name}`;
-			const details = item.createDiv({cls: 'sidekick-session-details'});
-			details.createDiv({cls: 'sidekick-session-name', text: displayName});
-
-			// Schedule description as subtitle
-			const scheduleParts: string[] = [];
-			if (trigger.cron) scheduleParts.push(SidekickView.describeCron(trigger.cron));
-			if (trigger.glob) scheduleParts.push(SidekickView.describeGlob(trigger.glob));
-			if (scheduleParts.length === 0) scheduleParts.push('No schedule');
-			const scheduleText = scheduleParts.join(' · ');
-			details.createDiv({cls: 'sidekick-session-time', text: scheduleText});
-
-			const tooltipParts = [displayName];
-			if (trigger.description) tooltipParts.push(trigger.description);
-			tooltipParts.push(scheduleText);
-			item.setAttribute('title', tooltipParts.join('\n'));
-
-			// Click opens the trigger file
-			item.addEventListener('click', () => {
-				const file = this.app.vault.getAbstractFileByPath(trigger.filePath);
-				if (file instanceof TFile) {
-					void this.app.workspace.getLeaf(false).openFile(file);
-				}
-			});
-		}
-	}
-
-	// ── Trigger scheduler ───────────────────────────────────────
-
-	/**
-	 * Set up the trigger scheduler for cron-based and file-change-based triggers.
-	 * Called once during onOpen after configs are loaded.
-	 */
-	private initTriggerScheduler(): void {
-		this.triggerScheduler = new TriggerScheduler({
-			onTriggerFire: (trigger, context) => void this.fireTriggerInBackground(trigger, context),
-			getLastFired: (key) => this.plugin.settings.triggerLastFired?.[key] ?? 0,
-			setLastFired: (key, ts) => {
-				if (!this.plugin.settings.triggerLastFired) {
-					this.plugin.settings.triggerLastFired = {};
-				}
-				this.plugin.settings.triggerLastFired[key] = ts;
-				void this.plugin.saveSettings();
-			},
-		});
-		this.triggerScheduler.setTriggers(this.triggers);
-		const intervalId = this.triggerScheduler.start();
-		this.registerInterval(intervalId);
-
-		// File change events for onFileChange triggers
-		// Debounce: collect changed file paths, then check triggers once after 1s of quiet
-		const sidekickFolder = normalizePath(this.plugin.settings.sidekickFolder);
-		const pendingFilePaths = new Set<string>();
-		let fileChangeTimer: ReturnType<typeof setTimeout> | null = null;
-		const FILE_CHANGE_DEBOUNCE = 1_000;
-
-		const scheduleFileChangeCheck = (filePath: string) => {
-			debugTrace(`Sidekick: vault modify event: ${filePath}`);
-			if (filePath.startsWith(sidekickFolder + '/') || filePath.startsWith('.sidekick-attachments/')) {
-				debugTrace(`Sidekick: ignoring change in excluded folder: ${filePath}`);
-				return;
-			}
-			pendingFilePaths.add(filePath);
-			if (fileChangeTimer) clearTimeout(fileChangeTimer);
-			fileChangeTimer = setTimeout(() => {
-				fileChangeTimer = null;
-				const paths = [...pendingFilePaths];
-				pendingFilePaths.clear();
-				this.invalidateSearchCache();
-				for (const p of paths) {
-					debugTrace(`Sidekick: vault file-change event (debounced): ${p}`);
-					this.triggerScheduler?.checkFileChangeTriggers(p, this.app);
-				}
-			}, FILE_CHANGE_DEBOUNCE);
-		};
-
-		this.registerEvent(
-			this.app.vault.on('modify', (file) => {
-				if (!(file instanceof TFile)) return;
-				scheduleFileChangeCheck(file.path);
-			})
-		);
-		this.registerEvent(
-			this.app.vault.on('create', (file) => {
-				if (!(file instanceof TFile)) return;
-				scheduleFileChangeCheck(file.path);
-			})
-		);
-		this.registerEvent(
-			this.app.vault.on('rename', (file, _oldPath) => {
-				if (!(file instanceof TFile)) return;
-				scheduleFileChangeCheck(file.path);
-			})
-		);
-	}
-
-	/**
-	 * Fire a trigger as a background session.
-	 * Creates a new SDK session with the trigger's agent, names it "Trigger: <description>",
-	 * sends the trigger content as the user prompt, and routes all events to a BackgroundSession.
-	 */
-	private async fireTriggerInBackground(trigger: TriggerConfig, context?: TriggerFireContext): Promise<void> {
-		if (!this.plugin.copilot) {
-			console.warn('Sidekick: trigger skipped — no copilot client available');
-			new Notice('Trigger skipped: Copilot is not connected. Check Settings → Sidekick.');
-			return;
-		}
-
-		try {
-			// Resolve agent and model
-			const agent = trigger.agent ? this.agents.find(a => a.name === trigger.agent) : undefined;
-			const model = this.resolveModelForAgent(agent, this.selectedModel || undefined);
-
-			const sessionConfig = this.buildSessionConfig({model, selectedAgentName: trigger.agent || undefined});
-
-			const session = await this.plugin.copilot.createSession(sessionConfig);
-			const sessionId = session.sessionId;
-
-			// Name the session: [trigger] <agent>: <content truncated>
-			const agentName = trigger.agent || 'Chat';
-			const truncatedContent = trigger.content.length > 40 ? trigger.content.slice(0, 40) + '…' : trigger.content;
-			const sessionName = `[trigger] ${agentName}: ${truncatedContent}`;
-			this.sessionNames[sessionId] = sessionName;
-			this.saveSessionNames();
-
-			// Build prompt (augment with file context for file-change triggers)
-			let prompt = trigger.content;
-			if (context?.filePath) {
-				const parts: string[] = [];
-				parts.push(`File changed: ${context.filePath}`);
-
-				// Diff (if previous snapshot available)
-				if (context.previousContent && context.currentContent) {
-					const diff = SidekickView.computeSimpleDiff(context.previousContent, context.currentContent);
-					if (diff) {
-						const truncatedDiff = diff.length > 1500 ? diff.slice(0, 1500) + '\n...(truncated)' : diff;
-						parts.push(`Changes:\n${truncatedDiff}`);
-					}
-				}
-
-				// Current file content excerpt (if no diff or first time)
-				if (!context.previousContent && context.currentContent) {
-					const excerpt = context.currentContent.length > 2000
-						? context.currentContent.slice(0, 2000) + '\n...(truncated)'
-						: context.currentContent;
-					parts.push(`Current content:\n${excerpt}`);
-				}
-
-				// Related files (if VaultIndex available)
-				if (this.vaultIndex) {
-					const linked = this.vaultIndex.getLinkedFiles(context.filePath);
-					if (linked.backward.length > 0) {
-						parts.push(`Referenced by: ${linked.backward.slice(0, 5).join(', ')}`);
-					}
-					if (linked.forward.length > 0) {
-						parts.push(`Links to: ${linked.forward.slice(0, 5).join(', ')}`);
-					}
-				}
-
-				prompt = `---\n${parts.join('\n\n')}\n---\n\n${trigger.content}`;
-			}
-
-			// Create background session
-			const bg: BackgroundSession = {
-				sessionId,
-				session,
-				messages: [{
-					id: `u-${Date.now()}`,
-					role: 'user',
-					content: prompt,
-					timestamp: Date.now(),
-				}],
-				isStreaming: true,
-				streamingContent: '',
-				savedDom: null,
-				unsubscribers: [],
-				turnStartTime: Date.now(),
-				turnToolsUsed: [],
-				turnSkillsUsed: [],
-				turnUsage: null,
-				activeToolCalls: new Map(),
-				streamingComponent: null,
-				streamingBodyEl: null,
-				streamingWrapperEl: null,
-				toolCallsContainer: null,
-			};
-
-			this.registerBackgroundEvents(bg);
-			this.activeSessions.set(sessionId, bg);
-
-			// Add to session list
-			const now = new Date();
-			if (!this.sessionList.some(s => s.sessionId === sessionId)) {
-				this.sessionList.unshift({
-					sessionId,
-					startTime: now,
-					modifiedTime: now,
-					isRemote: false,
-				} as SessionMetadata);
-			}
-			this.renderSessionList();
-
-			// Send the trigger content
-			await session.send({prompt});
-
-			new Notice(`Trigger fired: ${trigger.description || trigger.name}`);
-		} catch (e) {
-			console.error('Sidekick: trigger failed', trigger.name, e);
-			new Notice(`Trigger failed: ${trigger.description || trigger.name} — ${String(e)}`);
-		}
-	}
-
-	// ── Message rendering ────────────────────────────────────────
-
-	private addUserMessage(content: string, attachments: ChatAttachment[], scopePaths: string[]): void {
-		// Combine file/clipboard attachments with scope path entries for display
-		const allAttachments = [...attachments];
-		for (const sp of scopePaths) {
-			const displayName = sp === '/' ? this.app.vault.getName() : sp;
-			const abstract = sp === '/'
-				? this.app.vault.getRoot()
-				: this.app.vault.getAbstractFileByPath(sp);
-			const type = abstract instanceof TFolder ? 'directory' as const : 'file' as const;
-			allAttachments.push({type, name: displayName, path: sp});
-		}
-
-		const msg: ChatMessage = {
-			id: `u-${Date.now()}`,
-			role: 'user',
-			content,
-			timestamp: Date.now(),
-			attachments: allAttachments.length > 0 ? allAttachments : undefined,
-		};
-		this.messages.push(msg);
-		void this.renderMessageBubble(msg);
-		this.scrollToBottom();
-	}
-
-	private addInfoMessage(text: string): void {
-		const msg: ChatMessage = {id: `i-${Date.now()}`, role: 'info', content: text, timestamp: Date.now()};
-		this.messages.push(msg);
-		void this.renderMessageBubble(msg);
-		this.scrollToBottom();
-	}
-
-	private renderMessageBubble(msg: ChatMessage): Promise<void> {
-		if (msg.role === 'info') {
-			const el = this.chatContainer.createDiv({cls: 'sidekick-msg sidekick-msg-info'});
-			el.createSpan({text: msg.content});
-			return Promise.resolve();
-		}
-
-		const wrapper = this.chatContainer.createDiv({
-			cls: `sidekick-msg sidekick-msg-${msg.role}`,
-		});
-
-		const bodyWrapper = wrapper.createDiv({cls: 'sidekick-msg-body-wrapper'});
-
-		// Attachments
-		if (msg.attachments && msg.attachments.length > 0) {
-			const attRow = bodyWrapper.createDiv({cls: 'sidekick-msg-attachments'});
-			for (const att of msg.attachments) {
-				const chip = attRow.createSpan({cls: 'sidekick-msg-att-chip sidekick-att-clickable'});
-				const ic = chip.createSpan();
-				const icon = att.type === 'directory' ? 'folder' : att.type === 'image' ? 'image' : att.type === 'clipboard' ? 'clipboard' : att.type === 'selection' ? 'text-cursor-input' : 'file-text';
-				setIcon(ic, icon);
-				chip.appendText(` ${att.name}`);
-
-				// Click to open
-				if (att.type === 'clipboard') {
-					// Clipboard: copy content back to clipboard
-					if (att.content) {
-						chip.setAttribute('title', 'Copy to clipboard');
-						chip.addEventListener('click', () => {
-							void navigator.clipboard.writeText(att.content!);
-							new Notice('Copied to clipboard.');
-						});
-					}
-				} else if (att.absolutePath && att.path) {
-					// External OS file: open with default OS application
-					chip.setAttribute('title', 'Open with os default application');
-					chip.addEventListener('click', () => {
-						try {
-							const filePath = att.path!;
-							// Reject paths with traversal sequences
-							if (/\.\.[/\\]/.test(filePath)) {
-								new Notice('Cannot open file: path contains directory traversal.');
-								return;
-							}
-							const {shell} = globalThis.require('electron') as {shell: {openPath: (p: string) => Promise<string>}};
-							void shell.openPath(filePath);
-						} catch (e) {
-							new Notice(`Failed to open file: ${String(e)}`);
-						}
-					});
-				} else if (att.type === 'image' && att.path) {
-					// Pasted image in vault: open with OS image viewer
-					chip.setAttribute('title', 'Open with os image viewer');
-					chip.addEventListener('click', () => {
-						try {
-							const vaultPath = normalizePath(att.path!);
-							// Reject paths that escape the vault via traversal
-							if (vaultPath.startsWith('..') || vaultPath.includes('/../')) {
-								new Notice('Cannot open image: path escapes the vault.');
-								return;
-							}
-							const {shell} = globalThis.require('electron') as {shell: {openPath: (p: string) => Promise<string>}};
-							const absPath = this.getVaultBasePath() + '/' + vaultPath;
-							void shell.openPath(absPath);
-						} catch (e) {
-							new Notice(`Failed to open image: ${String(e)}`);
-						}
-					});
-				} else if (att.type === 'directory' && att.path) {
-					// Vault folder: reveal in file explorer
-					chip.setAttribute('title', 'Reveal in file explorer');
-					chip.addEventListener('click', () => {
-						const folder = att.path === '/'
-							? this.app.vault.getRoot()
-							: this.app.vault.getAbstractFileByPath(att.path!);
-						if (folder) {
-							// Reveal the folder in Obsidian's file explorer
-							const fileExplorer = this.app.workspace.getLeavesOfType('file-explorer')[0];
-							if (fileExplorer) {
-								void this.app.workspace.revealLeaf(fileExplorer);
-								(fileExplorer.view as unknown as {revealInFolder?: (f: unknown) => void}).revealInFolder?.(folder);
-							}
-						}
-					});
-				} else if (att.type === 'selection' && att.path) {
-					// Selection: open file at the selected line
-					const selRange = att.selection;
-					const preview = att.content && att.content.length > 80 ? att.content.slice(0, 80) + '…' : att.content || '';
-					const rangeLabel = selRange
-						? selRange.startLine === selRange.endLine
-							? `line ${selRange.startLine}`
-							: `lines ${selRange.startLine}-${selRange.endLine}`
-						: '';
-					chip.setAttribute('title', `Open ${att.path}${rangeLabel ? ` (${rangeLabel})` : ''}${preview ? `:\n${preview}` : ''}`);
-					chip.addEventListener('click', () => {
-						const file = this.app.vault.getAbstractFileByPath(att.path!);
-						if (file instanceof TFile) {
-							const leaf = this.app.workspace.getLeaf(false);
-							void leaf.openFile(file).then(() => {
-								if (selRange) {
-									const mdView = this.app.workspace.getActiveViewOfType(MarkdownView);
-									if (mdView) {
-										mdView.editor.setCursor({line: selRange.startLine - 1, ch: selRange.startChar});
-										mdView.editor.setSelection(
-											{line: selRange.startLine - 1, ch: selRange.startChar},
-											{line: selRange.endLine - 1, ch: selRange.endChar},
-										);
-									}
-								}
-							});
-						}
-					});
-				} else if (att.type === 'file' && att.path) {
-					// Vault file: open in Obsidian
-					chip.setAttribute('title', 'Open in Obsidian');
-					chip.addEventListener('click', () => {
-						const file = this.app.vault.getAbstractFileByPath(att.path!);
-						if (file instanceof TFile) {
-							void this.app.workspace.getLeaf(false).openFile(file);
-						}
-					});
-				}
-			}
-		}
-
-		const body = bodyWrapper.createDiv({cls: 'sidekick-msg-body'});
-
-		if (msg.role === 'assistant') {
-			return this.renderMarkdownSafe(msg.content, body);
-		} else {
-			this.renderUserMessageContent(msg.content, body);
-			// Copy button for user messages
-			const copyBtn = wrapper.createEl('button', {
-				cls: 'sidekick-msg-copy',
-				attr: {title: 'Copy to clipboard'},
-			});
-			setIcon(copyBtn, 'copy');
-			copyBtn.addEventListener('click', () => {
-				void navigator.clipboard.writeText(msg.content);
-				setIcon(copyBtn, 'check');
-				setTimeout(() => setIcon(copyBtn, 'copy'), 1500);
-			});
-		}
-		return Promise.resolve();
-	}
-
-	/**
-	 * Render user message content, highlighting `/prompt-name` with a tooltip if it matches a known prompt.
-	 */
-	private renderUserMessageContent(content: string, body: HTMLElement): void {
-		if (content.startsWith('/')) {
-			const spaceIdx = content.indexOf(' ');
-			const cmdName = spaceIdx > 0 ? content.slice(1, spaceIdx) : content.slice(1);
-			const matchedPrompt = this.prompts.find(p => p.name === cmdName);
-			if (matchedPrompt) {
-				const p = body.createEl('p');
-				const promptSpan = p.createSpan({cls: 'sidekick-prompt-tag', text: `/${cmdName}`});
-				promptSpan.setAttribute('title', matchedPrompt.content);
-				if (spaceIdx > 0) {
-					p.appendText(content.slice(spaceIdx));
-				}
-				return;
-			}
-		}
-		body.createEl('p', {text: content});
-	}
-
-	private addAssistantPlaceholder(): void {
-		const wrapper = this.chatContainer.createDiv({cls: 'sidekick-msg sidekick-msg-assistant'});
-
-		const bodyWrapper = wrapper.createDiv({cls: 'sidekick-msg-body-wrapper'});
-
-		// Container for collapsible tool call blocks
-		this.toolCallsContainer = bodyWrapper.createDiv({cls: 'sidekick-tool-calls'});
-
-		const body = bodyWrapper.createDiv({cls: 'sidekick-msg-body'});
-		const thinking = body.createDiv({cls: 'sidekick-thinking'});
-		thinking.createSpan({text: 'Thinking'});
-		const dots = thinking.createSpan({cls: 'sidekick-thinking-dots'});
-		dots.createSpan({cls: 'sidekick-dot', text: '.'});
-		dots.createSpan({cls: 'sidekick-dot', text: '.'});
-		dots.createSpan({cls: 'sidekick-dot', text: '.'});
-
-		// Clean up any previous streaming component
-		if (this.streamingComponent) {
-			this.removeChild(this.streamingComponent);
-			this.streamingComponent = null;
-		}
-		this.streamingComponent = this.addChild(new Component());
-
-		this.streamingBodyEl = body;
-		this.streamingWrapperEl = bodyWrapper;
-		this.scrollToBottom();
-	}
-
-	private showProcessingIndicator(): void {
-		if (!this.streamingBodyEl) return;
-		// Remove any existing thinking/processing indicator
-		const existing = this.streamingBodyEl.querySelector('.sidekick-thinking');
-		if (existing) existing.remove();
-		const processing = this.streamingBodyEl.createDiv({cls: 'sidekick-thinking'});
-		processing.createSpan({text: 'Processing'});
-		const dots = processing.createSpan({cls: 'sidekick-thinking-dots'});
-		dots.createSpan({cls: 'sidekick-dot', text: '.'});
-		dots.createSpan({cls: 'sidekick-dot', text: '.'});
-		dots.createSpan({cls: 'sidekick-dot', text: '.'});
-	}
-
-	private removeProcessingIndicator(): void {
-		if (!this.streamingBodyEl) return;
-		const indicator = this.streamingBodyEl.querySelector('.sidekick-thinking');
-		if (indicator) indicator.remove();
-	}
-
-	// ── Streaming ────────────────────────────────────────────────
-
-	private appendDelta(delta: string): void {
-		this.streamingContent += delta;
-		// Remove processing indicator once real content starts streaming
-		this.removeProcessingIndicator();
-		if (!this.renderScheduled) {
-			this.renderScheduled = true;
-			window.requestAnimationFrame(() => {
-				this.renderScheduled = false;
-				this.updateStreamingRenderIncremental();
-			});
-		}
-	}
-
-	/**
-	 * Append only the new delta text as a plain text node.
-	 * A periodic timer does full markdown re-renders every 300ms
-	 * to resolve cross-boundary syntax (code blocks, lists, etc.).
-	 */
-	private updateStreamingRenderIncremental(): void {
-		if (!this.streamingBodyEl) return;
-
-		const newText = this.streamingContent.slice(this.lastFullRenderLen);
-		if (newText) {
-			// Append raw text node for immediate visual feedback
-			this.streamingBodyEl.appendText(newText);
-			this.lastFullRenderLen = this.streamingContent.length;
-		}
-
-		// Schedule a periodic full re-render if not already scheduled
-		if (!this.fullRenderTimer) {
-			this.fullRenderTimer = setTimeout(() => {
-				this.fullRenderTimer = null;
-				void this.doFullStreamingRender();
-			}, 300);
-		}
-
-		this.scrollToBottom();
-	}
-
-	/** Full markdown re-render of the entire streamed content so far. */
-	private async doFullStreamingRender(): Promise<void> {
-		if (!this.streamingBodyEl) return;
-		this.streamingBodyEl.empty();
-		await this.renderMarkdownSafe(this.streamingContent, this.streamingBodyEl);
-		this.lastFullRenderLen = this.streamingContent.length;
-		// Full re-render may change layout; use rAF to scroll after paint.
-		window.requestAnimationFrame(() => this.scrollToBottom());
-	}
-
-	private async updateStreamingRender(): Promise<void> {
-		if (!this.streamingBodyEl) return;
-		this.streamingBodyEl.empty();
-		await this.renderMarkdownSafe(this.streamingContent, this.streamingBodyEl);
-		this.scrollToBottom();
-	}
-
-	private finalizeStreamingMessage(): void {
-		// Always remove any lingering thinking/processing indicator
-		this.removeProcessingIndicator();
-
-		if (this.streamingContent) {
-			const msg: ChatMessage = {
-				id: `a-${Date.now()}`,
-				role: 'assistant',
-				content: this.streamingContent,
-				timestamp: Date.now(),
-			};
-			this.messages.push(msg);
-		}
-
-		// Clean up incremental render timer and do final full render
-		if (this.fullRenderTimer) {
-			clearTimeout(this.fullRenderTimer);
-			this.fullRenderTimer = null;
-		}
-		if (this.streamingBodyEl && this.streamingContent) {
-			this.streamingBodyEl.empty();
-			void this.renderMarkdownSafe(this.streamingContent, this.streamingBodyEl);
-		} else if (this.streamingBodyEl && !this.streamingContent) {
-			// No text was streamed — show a subtle fallback
-			this.streamingBodyEl.empty();
-			this.streamingBodyEl.createDiv({
-				cls: 'sidekick-thinking sidekick-cancelled',
-				text: 'No response',
-			});
-		}
-		this.lastFullRenderLen = 0;
-
-		// Render metadata footer
-		this.renderMessageMetadata();
-
-		this.streamingContent = '';
-		this.streamingBodyEl = null;
-		this.streamingWrapperEl = null;
-		this.toolCallsContainer = null;
-		this.activeToolCalls.clear();
-
-		if (this.streamingComponent) {
-			this.removeChild(this.streamingComponent);
-			this.streamingComponent = null;
-		}
-
-		// Reset turn metadata
-		this.turnStartTime = 0;
-		this.turnToolsUsed = [];
-		this.turnSkillsUsed = [];
-		this.turnUsage = null;
-
-		this.isStreaming = false;
-		this.updateSendButton();
-
-		// Update local session timestamp instead of full SDK round-trip
-		if (this.currentSessionId) {
-			const entry = this.sessionList.find(s => s.sessionId === this.currentSessionId);
-			if (entry) {
-				entry.modifiedTime = new Date();
-			}
-		}
-		this.renderSessionList();
-	}
-
-	private renderMessageMetadata(): void {
-		if (!this.streamingWrapperEl) return;
-
-		const hasTime = this.turnStartTime > 0;
-		const hasTokens = this.turnUsage !== null;
-		const uniqueTools = [...new Set(this.turnToolsUsed)];
-		const hasTools = uniqueTools.length > 0;
-		const uniqueSkills = [...new Set(this.turnSkillsUsed)];
-		const hasSkills = uniqueSkills.length > 0;
-
-		if (!hasTime && !hasTokens && !hasTools && !hasSkills) return;
-
-		const footer = this.streamingWrapperEl.createDiv({cls: 'sidekick-msg-metadata'});
-
-		// Elapsed time
-		if (hasTime) {
-			const elapsed = Date.now() - this.turnStartTime;
-			const timeText = elapsed < 1000 ? `${elapsed}ms` : `${(elapsed / 1000).toFixed(1)}s`;
-			const timeSpan = footer.createSpan({cls: 'sidekick-metadata-item'});
-			const timeIcon = timeSpan.createSpan({cls: 'sidekick-metadata-icon'});
-			setIcon(timeIcon, 'clock');
-			timeSpan.appendText(timeText);
-		}
-
-		// Token usage — show rounded total, detail on hover
-		if (hasTokens) {
-			const u = this.turnUsage!;
-			const total = u.inputTokens + u.cacheReadTokens + u.outputTokens;
-			const rounded = total >= 1000 ? `${(total / 1000).toFixed(1)}k` : `${total}`;
-			const tooltipLines: string[] = [];
-			if (u.model) tooltipLines.push(`Model: ${u.model}`);
-			tooltipLines.push(`Input: ${u.inputTokens}`);
-			tooltipLines.push(`Output: ${u.outputTokens}`);
-			if (u.cacheReadTokens > 0) tooltipLines.push(`Cached: ${u.cacheReadTokens}`);
-			if (u.cacheWriteTokens > 0) tooltipLines.push(`Cache write: ${u.cacheWriteTokens}`);
-			const tokenSpan = footer.createSpan({cls: 'sidekick-metadata-item'});
-			const tokenIcon = tokenSpan.createSpan({cls: 'sidekick-metadata-icon'});
-			setIcon(tokenIcon, 'hash');
-			tokenSpan.appendText(`${rounded} tokens`);
-			tokenSpan.setAttribute('title', tooltipLines.join('\n'));
-		}
-
-		// Tools used
-		if (hasTools) {
-			const toolSpan = footer.createSpan({cls: 'sidekick-metadata-item sidekick-metadata-tools'});
-			const toolIcon = toolSpan.createSpan({cls: 'sidekick-metadata-icon'});
-			setIcon(toolIcon, 'wrench');
-			const toolLabel = uniqueTools.length === 1 ? '1 tool' : `${uniqueTools.length} tools`;
-			toolSpan.appendText(toolLabel);
-			toolSpan.setAttribute('title', uniqueTools.join('\n'));
-		}
-
-		// Skills used
-		if (hasSkills) {
-			const skillSpan = footer.createSpan({cls: 'sidekick-metadata-item sidekick-metadata-tools'});
-			const skillIcon = skillSpan.createSpan({cls: 'sidekick-metadata-icon'});
-			setIcon(skillIcon, 'wand-2');
-			const skillLabel = uniqueSkills.length === 1 ? '1 skill' : `${uniqueSkills.length} skills`;
-			skillSpan.appendText(skillLabel);
-			skillSpan.setAttribute('title', uniqueSkills.join('\n'));
-		}
-	}
-
-	private addToolCallBlock(toolCallId: string, toolName: string, args?: unknown): void {
-		if (!this.toolCallsContainer) return;
-
-		const details = this.toolCallsContainer.createEl('details', {cls: 'sidekick-tool-call'});
-		const summary = details.createEl('summary', {cls: 'sidekick-tool-call-summary'});
-		const iconEl = summary.createSpan({cls: 'sidekick-tool-call-icon'});
-		setIcon(iconEl, 'wrench');
-		summary.createSpan({cls: 'sidekick-tool-call-name', text: toolName});
-		const spinner = summary.createSpan({cls: 'sidekick-tool-call-spinner'});
-		setIcon(spinner, 'loader');
-
-		// Input section
-		if (args && Object.keys(args as Record<string, unknown>).length > 0) {
-			const inputSection = details.createDiv({cls: 'sidekick-tool-call-section'});
-			inputSection.createDiv({cls: 'sidekick-tool-call-label', text: 'Input'});
-			const pre = inputSection.createEl('pre', {cls: 'sidekick-tool-call-code'});
-			pre.createEl('code', {text: JSON.stringify(args, null, 2)});
-		}
-
-		this.activeToolCalls.set(toolCallId, {toolName, detailsEl: details});
-
-		// Show "Processing ..." animation while tools are running
-		this.showProcessingIndicator();
-
-		this.scrollToBottom();
-	}
-
-	private completeToolCallBlock(toolCallId: string, success: boolean, result?: {content?: string; detailedContent?: string}, error?: {message: string}): void {
-		const entry = this.activeToolCalls.get(toolCallId);
-		if (!entry) return;
-
-		const {detailsEl} = entry;
-
-		// Remove spinner, add status icon
-		const spinner = detailsEl.querySelector('.sidekick-tool-call-spinner');
-		if (spinner) spinner.remove();
-		const summaryEl = detailsEl.querySelector('summary');
-		if (summaryEl) {
-			const statusEl = summaryEl.createSpan({cls: `sidekick-tool-call-status ${success ? 'is-success' : 'is-error'}`});
-			setIcon(statusEl, success ? 'check' : 'x');
-		}
-
-		// Output section
-		const output = error ? `Error: ${error.message}` : (result?.detailedContent || result?.content || '');
-		if (output) {
-			const outputSection = detailsEl.createDiv({cls: 'sidekick-tool-call-section'});
-			outputSection.createDiv({cls: 'sidekick-tool-call-label', text: success ? 'Output' : 'Error'});
-			const pre = outputSection.createEl('pre', {cls: 'sidekick-tool-call-code'});
-			const maxLen = 5000;
-			const displayText = output.length > maxLen ? output.slice(0, maxLen) + '\n… (truncated)' : output;
-			pre.createEl('code', {text: displayText});
-		}
-
-		this.activeToolCalls.delete(toolCallId);
-		this.scrollToBottom();
-	}
-
 	// ── Subagent blocks ──────────────────────────────────────────
 
-	private activeSubagentBlocks = new Map<string, HTMLElement>();
-
-	private addSubagentBlock(toolCallId: string, agentName: string, _status: string, description?: string): void {
+	addSubagentBlock(toolCallId: string, agentName: string, _status: string, description?: string): void {
 		if (!this.toolCallsContainer) return;
 
 		const block = this.toolCallsContainer.createDiv({cls: 'sidekick-subagent-block'});
@@ -4942,7 +4137,7 @@ export class SidekickView extends ItemView {
 		this.scrollToBottom();
 	}
 
-	private updateSubagentBlock(toolCallId: string, status: 'completed' | 'failed', error?: string): void {
+	updateSubagentBlock(toolCallId: string, status: 'completed' | 'failed', error?: string): void {
 		const block = this.activeSubagentBlocks.get(toolCallId);
 		if (!block) return;
 
@@ -4968,30 +4163,15 @@ export class SidekickView extends ItemView {
 		this.scrollToBottom();
 	}
 
-	/** Disable config controls that cannot be changed mid-session. */
-	private updateToolbarLock(): void {
-		// No-op: all config changes set configDirty = true, which triggers
-		// a new session on the next send. No need to lock controls.
-	}
-
-	private updateSendButton(): void {
-		this.sendBtn.empty();
-		if (this.isStreaming) {
-			setIcon(this.sendBtn, 'square');
-			this.sendBtn.title = 'Stop';
-			this.sendBtn.addClass('is-streaming');
-		} else {
-			setIcon(this.sendBtn, 'arrow-up');
-			this.sendBtn.title = 'Send message';
-			this.sendBtn.removeClass('is-streaming');
-		}
-	}
-
 	// ── Send & abort ─────────────────────────────────────────────
 
 	async handleSend(): Promise<void> {
 		const rawInput = this.inputEl.value.trim();
 		if (!rawInput || this.isStreaming) return;
+
+		// Lock immediately to prevent duplicate submissions from rapid clicks
+		this.isStreaming = true;
+		this.updateSendButton();
 
 		// Close dropdowns
 		this.closePromptDropdown();
@@ -5004,6 +4184,8 @@ export class SidekickView extends ItemView {
 			const cmdArg = spaceIdx > 0 ? rawInput.slice(spaceIdx + 1).trim() : undefined;
 			const isBuiltin = SidekickView.BUILTIN_COMMANDS.some(c => c.name === cmdName);
 			if (isBuiltin) {
+				this.isStreaming = false;
+				this.updateSendButton();
 				this.inputEl.value = '';
 				this.inputEl.setCssProps({'--input-height': 'auto'});
 				this.executeBuiltinCommand(cmdName, cmdArg);
@@ -5012,6 +4194,8 @@ export class SidekickView extends ItemView {
 		}
 
 		if (!this.plugin.copilot) {
+			this.isStreaming = false;
+			this.updateSendButton();
 			new Notice('Copilot is not configured.');
 			return;
 		}
@@ -5089,6 +4273,25 @@ export class SidekickView extends ItemView {
 		// Prepend prompt template content if active
 		const sendPrompt = usedPrompt ? `${usedPrompt.content}\n\n${prompt}` : prompt;
 
+		this.activePrompt = null;
+		this.inputEl.removeAttribute('title');
+
+		// Update UI immediately so the user sees feedback before any async work
+		this.addUserMessage(displayPrompt, currentAttachments, currentScopePaths);
+		this.inputEl.value = '';
+		this.inputEl.setCssProps({'--input-height': 'auto'});
+		this.attachments = [];
+		this.renderAttachments();
+		this.rebuildSuggestions(false);
+		this.renderActiveNoteBar();
+
+		// Begin streaming
+		this.streamingContent = '';
+		this.updateSendButton();
+		this.renderSessionList();  // Show green active dot
+		this.addAssistantPlaceholder();
+
+		// Agent triage (async) — runs after UI is already updated
 		if (this.plugin.settings.agentTriage && !this.selectedAgent && this.agents.length > 1) {
 			if (!this.triageAgentForSession) {
 				const routed = await this.triageRequest(sendPrompt);
@@ -5099,25 +4302,6 @@ export class SidekickView extends ItemView {
 				}
 			}
 		}
-
-		this.activePrompt = null;
-		this.inputEl.removeAttribute('title');
-
-		// Update UI
-		this.addUserMessage(displayPrompt, currentAttachments, currentScopePaths);
-		this.inputEl.value = '';
-		this.inputEl.setCssProps({'--input-height': 'auto'});
-		this.attachments = [];
-		this.renderAttachments();
-		this.rebuildSuggestions(false);
-		this.renderActiveNoteBar();
-
-		// Begin streaming
-		this.isStreaming = true;
-		this.streamingContent = '';
-		this.updateSendButton();
-		this.renderSessionList();  // Show green active dot
-		this.addAssistantPlaceholder();
 
 		try {
 			await this.ensureSession();
@@ -5133,11 +4317,10 @@ export class SidekickView extends ItemView {
 				this.renderSessionList();
 			}
 
-			const vaultBase = (this.app.vault.adapter as any).getBasePath?.() ?? '';
 			const sdkAttachments = buildSdkAttachments({
 				attachments: currentAttachments,
 				scopePaths: currentScopePaths,
-				vaultBasePath: vaultBase,
+				vaultBasePath: this.getVaultBasePath(),
 				app: this.app,
 			});
 			let fullPrompt = buildPrompt(sendPrompt, currentAttachments, this.cursorPosition, this.activeSelection);
@@ -5466,13 +4649,19 @@ export class SidekickView extends ItemView {
 				}
 				if (Object.keys(scoped).length > 0) agentMcpServers = scoped;
 			}
-			// Build prompt: always include the available sub-agent roster.
+			// Build prompt: include available sub-agent roster (filtered by handoffs if specified).
 			let prompt = a.instructions;
-			const subAgents = this.agents.filter(ag => ag.name !== a.name);
+			const subAgents = this.agents.filter(ag => {
+				if (ag.name === a.name) return false;
+				if (a.handoffs !== undefined) return a.handoffs.some(h => h.agent === ag.name);
+				return true;
+			});
 			if (subAgents.length > 0) {
-				const agentDescs = subAgents.map(ag =>
-					ag.description ? `- **${ag.name}**: ${ag.description}` : `- **${ag.name}**`
-				).join('\n');
+				const agentDescs = subAgents.map(ag => {
+					const handoff = a.handoffs?.find(h => h.agent === ag.name);
+					const base = ag.description ? `- **${ag.name}**: ${ag.description}` : `- **${ag.name}**`;
+					return handoff?.prompt ? `${base}\n  Handoff instructions: ${handoff.prompt}` : base;
+				}).join('\n');
 				prompt += `\n\nYou can delegate tasks to the following sub-agents by invoking them as tools:\n${agentDescs}`;
 			}
 			return {
@@ -5527,9 +4716,12 @@ export class SidekickView extends ItemView {
 
 		const reasoningEffort = this.plugin.settings.reasoningEffort;
 
-		// Build system message: agent instructions + MCP tool guidance
+		// Build system message: global instructions + agent instructions + MCP tool guidance
 		const mcpServerNames = Object.keys(mcpServers);
 		const systemParts: string[] = [];
+		if (this.globalInstructions) {
+			systemParts.push(this.globalInstructions);
+		}
 		if (systemContent) {
 			systemParts.push(systemContent);
 		}
@@ -5570,7 +4762,7 @@ export class SidekickView extends ItemView {
 		};
 	}
 
-	private async triageRequest(prompt: string): Promise<string | null> {
+	async triageRequest(prompt: string): Promise<string | null> {
 		if (!this.plugin.copilot) return null;
 		if (this.agents.length <= 1) return null;
 		if (this.selectedAgent) return null;
@@ -5637,11 +4829,15 @@ export class SidekickView extends ItemView {
 		return base + '/' + normalizePath(this.workingDir);
 	}
 
+	getAgentsFolder(): string {
+		return getAgentsFolder(this.plugin.settings);
+	}
+
 	getVaultBasePath(): string {
 		return (this.app.vault.adapter as unknown as {basePath: string}).basePath;
 	}
 
-	private scrollToBottom(): void {
+	scrollToBottom(): void {
 		// Only auto-scroll if user is near the bottom.
 		// Scroll immediately (no extra rAF) since callers are already in
 		// rAF or post-render context — an extra frame delay during streaming

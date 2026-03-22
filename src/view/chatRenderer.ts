@@ -26,6 +26,7 @@ declare module '../sidekickView' {
 		updateStreamingRender(): Promise<void>;
 		finalizeStreamingMessage(): void;
 		renderMessageMetadata(): void;
+		renderHandoffButtons(): void;
 		addToolCallBlock(toolCallId: string, toolName: string, args?: unknown): void;
 		completeToolCallBlock(toolCallId: string, success: boolean, result?: {content?: string; detailedContent?: string}, error?: {message: string}): void;
 		renderWelcome(): void;
@@ -373,6 +374,9 @@ export function installChatRenderer(ViewClass: {prototype: unknown}): void {
 		// Render metadata footer
 		this.renderMessageMetadata();
 
+		// Render handoff buttons if the active agent has handoffs
+		this.renderHandoffButtons();
+
 		this.streamingContent = '';
 		this.streamingBodyEl = null;
 		this.streamingWrapperEl = null;
@@ -464,6 +468,66 @@ export function installChatRenderer(ViewClass: {prototype: unknown}): void {
 			skillSpan.appendText(skillLabel);
 			skillSpan.setAttribute('title', uniqueSkills.join('\n'));
 		}
+	};
+
+	proto.renderHandoffButtons = function (): void {
+		if (!this.streamingWrapperEl) return;
+
+		// Find the active agent (selected or triaged)
+		const agentName = this.selectedAgent || this.triageAgentForSession;
+		if (!agentName) return;
+
+		const agent = this.agents.find((a: {name: string}) => a.name === agentName);
+		if (!agent?.handoffs || agent.handoffs.length === 0) return;
+
+		const container = this.streamingWrapperEl.createDiv({cls: 'sidekick-handoff-buttons'});
+
+		for (const handoff of agent.handoffs) {
+			const btn = container.createEl('button', {
+				cls: 'sidekick-handoff-btn',
+			});
+			const icon = btn.createSpan({cls: 'sidekick-handoff-icon'});
+			setIcon(icon, 'arrow-right');
+			btn.appendText(handoff.label || handoff.agent);
+
+			const tipParts: string[] = [`Switch to ${handoff.agent}`];
+			if (handoff.prompt) tipParts.push(handoff.prompt.length > 80 ? handoff.prompt.slice(0, 80) + '…' : handoff.prompt);
+			if (handoff.send) tipParts.push('(auto-sends)');
+			btn.setAttribute('title', tipParts.join('\n'));
+
+			btn.addEventListener('click', () => {
+				// Switch to target agent
+				this.selectAgent(handoff.agent);
+
+				// Apply model override if specified
+				if (handoff.model) {
+					const modelMatch = this.models.find((m: {id: string; name: string}) =>
+						m.id === handoff.model || m.name.toLowerCase() === handoff.model!.toLowerCase()
+					);
+					if (modelMatch) {
+						this.selectedModel = modelMatch.id;
+						this.modelSelect.value = modelMatch.id;
+						this.configDirty = true;
+					}
+				}
+
+				if (handoff.prompt) {
+					this.inputEl.value = handoff.prompt;
+					this.inputEl.setCssProps({'--input-height': 'auto'});
+					this.inputEl.setCssProps({
+						'--input-height': Math.min(this.inputEl.scrollHeight, 200) + 'px',
+					});
+
+					if (handoff.send) {
+						this.handleSend();
+					} else {
+						this.inputEl.focus();
+					}
+				}
+			});
+		}
+
+		this.scrollToBottom();
 	};
 
 	proto.addToolCallBlock = function (toolCallId: string, toolName: string, args?: unknown): void {

@@ -1,6 +1,6 @@
 {
 	"name": "obsidian-sidekick",
-	"version": "1.2.1",
+	"version": "1.2.1-jinle",
 	"description": "Your Obsidian sidekick.",
 	"main": "main.js",
 	"type": "module",

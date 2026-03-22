@@ -10,7 +10,7 @@ import {mapMcpServers} from './sessionConfig';
 declare module '../sidekickView' {
 	interface SidekickView {
 		buildSearchPanel(parent: HTMLElement): void;
-		readonly searchMode: 'basic' | 'advanced';
+		searchMode: 'basic' | 'advanced';
 		toggleSearchMode(): void;
 		updateSearchModeToggle(): void;
 		updateSearchAdvancedVisibility(): void;

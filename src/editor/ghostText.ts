@@ -25,7 +25,7 @@ import {
 } from '@codemirror/view';
 import {setIcon, Menu, Notice, TFile} from 'obsidian';
 import type {HeadingCache} from 'obsidian';
-import type SidekickPlugin from './main';
+import type SidekickPlugin from '../main';
 import {buildSidekickMenu} from './editorMenu';
 
 /* ── Constants ───────────────────────────────────────────────── */

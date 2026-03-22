@@ -11,7 +11,7 @@ import type {SessionConfig, CopilotSession, PermissionRequest, CustomAgentConfig
 import {approveAll} from '../copilot';
 import type {AgentConfig, SkillInfo, McpServerEntry} from '../types';
 import {getSkillsFolder, getMcpInputValue} from '../settings';
-import {loadAgents, loadSkills, loadMcpServers} from '../configLoader';
+import {loadAgents, loadSkills, loadMcpServers, loadInstructions} from '../configLoader';
 import type {InputResolver} from '../configLoader';
 import {mapMcpServers} from '../view/sessionConfig';
 import {resolveModelForAgent} from '../view/sessionConfig';
@@ -56,6 +56,8 @@ export class TelegramBotService {
 	private agents: AgentConfig[] = [];
 	private skills: SkillInfo[] = [];
 	private mcpServers: McpServerEntry[] = [];
+	/** Concatenated content from *.instructions.md files. */
+	private globalInstructions = '';
 
 	/** Status change callbacks. */
 	private statusListeners: Array<(status: BotConnectionStatus) => void> = [];
@@ -362,6 +364,9 @@ export class TelegramBotService {
 
 		const reasoningEffort = this.plugin.settings.reasoningEffort;
 
+		// Build system message from global instructions
+		const systemContent = this.globalInstructions || undefined;
+
 		return {
 			model: (provider && this.plugin.settings.providerModel) ? this.plugin.settings.providerModel : model,
 			streaming: providerPreset !== 'foundry-local',
@@ -373,6 +378,7 @@ export class TelegramBotService {
 			...(customAgents.length > 0 ? {customAgents} : {}),
 			...(skillDirs.length > 0 ? {skillDirectories: skillDirs} : {}),
 			...(disabledSkills.length > 0 ? {disabledSkills} : {}),
+			...(systemContent ? {systemMessage: {mode: 'append' as const, content: systemContent}} : {}),
 		};
 	}
 
@@ -542,14 +548,16 @@ export class TelegramBotService {
 				return Promise.resolve(getMcpInputValue(app, this.plugin, input.id, isPassword));
 			};
 
-			const [agents, skills, mcpServers] = await Promise.all([
+			const [agents, skills, mcpServers, globalInstructions] = await Promise.all([
 				loadAgents(app, normalizePath(`${s.sidekickFolder}/agents`)),
 				loadSkills(app, normalizePath(`${s.sidekickFolder}/skills`)),
 				loadMcpServers(app, normalizePath(`${s.sidekickFolder}/tools`), inputResolver),
+				loadInstructions(app, s.sidekickFolder),
 			]);
 			this.agents = agents;
 			this.skills = skills;
 			this.mcpServers = mcpServers;
+			this.globalInstructions = globalInstructions;
 		} catch (e) {
 			console.error('Sidekick Telegram: failed to reload configs', e);
 		}

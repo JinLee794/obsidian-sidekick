@@ -1,5 +1,5 @@
 import {App, normalizePath, TFile, TFolder} from 'obsidian';
-import type {AgentConfig, SkillInfo, McpServerEntry, McpInputVariable, PromptConfig, TriggerConfig} from './types';
+import type {AgentConfig, HandoffConfig, SkillInfo, McpServerEntry, McpInputVariable, PromptConfig, TriggerConfig} from './types';
 
 /** Module-level compiled regex for frontmatter detection. */
 const FM_RE = /^---\r?\n([\s\S]*?)\r?\n---\r?\n?([\s\S]*)$/;
@@ -8,9 +8,9 @@ const FM_RE = /^---\r?\n([\s\S]*?)\r?\n---\r?\n?([\s\S]*)$/;
  * Parse YAML-like frontmatter from markdown content.
  * Returns parsed key-value pairs and the body after the frontmatter block.
  */
-function parseFrontmatter(content: string): {meta: Record<string, string | string[]>; body: string} {
+function parseFrontmatter(content: string): {meta: Record<string, string | string[]>; body: string; rawYaml: string} {
 	const match = content.match(FM_RE);
-	if (!match) return {meta: {}, body: content};
+	if (!match) return {meta: {}, body: content, rawYaml: ''};
 	const meta: Record<string, string | string[]> = {};
 	const lines = (match[1] ?? '').split('\n');
 	let currentKey = '';
@@ -44,7 +44,121 @@ function parseFrontmatter(content: string): {meta: Record<string, string | strin
 			}
 		}
 	}
-	return {meta, body: match[2] ?? ''};
+	return {meta, body: match[2] ?? '', rawYaml: match[1] ?? ''};
+}
+
+/**
+ * Parse structured handoffs from raw YAML frontmatter text.
+ * Supports both simple string lists and rich object lists.
+ */
+function parseHandoffsBlock(yamlText: string): HandoffConfig[] | undefined {
+	const lines = yamlText.split('\n');
+	let startIdx = -1;
+	for (let i = 0; i < lines.length; i++) {
+		if (/^handoffs\s*:/.test(lines[i]!)) {
+			startIdx = i + 1;
+			break;
+		}
+	}
+	if (startIdx === -1) return undefined;
+
+	// Collect indented lines belonging to handoffs block
+	const blockLines: string[] = [];
+	for (let i = startIdx; i < lines.length; i++) {
+		const line = lines[i]!;
+		if (line.trim() === '') { blockLines.push(line); continue; }
+		if (!/^\s/.test(line)) break; // non-indented = new top-level key
+		blockLines.push(line);
+	}
+	if (blockLines.length === 0) return [];
+
+	// Detect simple list ("- agent-name") vs structured ("- label: ...")
+	const firstContent = blockLines.find(l => l.trim().startsWith('-'));
+	if (!firstContent) return [];
+	const afterDash = firstContent.replace(/^\s*-\s*/, '').trim();
+	if (!afterDash.includes(':')) {
+		// Simple string list — convert to HandoffConfig[]
+		return blockLines
+			.map(l => l.match(/^\s*-\s+(.+)/))
+			.filter((m): m is RegExpMatchArray => m !== null)
+			.map(m => ({label: m[1]!.trim(), agent: m[1]!.trim()}));
+	}
+
+	// Rich structured handoffs: list of objects
+	const handoffs: HandoffConfig[] = [];
+	let obj: Record<string, string> = {};
+	let blockKey = '';
+	let blockIndent = 0;
+
+	const flush = () => {
+		if (Object.keys(obj).length > 0) {
+			handoffs.push({
+				label: obj['label'] || obj['agent'] || '',
+				agent: obj['agent'] || '',
+				...(obj['prompt'] ? {prompt: obj['prompt'].trim()} : {}),
+				...(obj['send'] !== undefined ? {send: obj['send'].toLowerCase() === 'true'} : {}),
+				...(obj['model'] ? {model: obj['model']} : {}),
+			});
+		}
+		obj = {};
+		blockKey = '';
+	};
+
+	for (const line of blockLines) {
+		// New list item ("  - key: value")
+		const itemMatch = line.match(/^(\s*)-\s+(.+)/);
+		if (itemMatch) {
+			flush();
+			blockIndent = (itemMatch[1]?.length ?? 0) + 2;
+			const content = itemMatch[2]!.trim();
+			const ci = content.indexOf(':');
+			if (ci > 0) {
+				const key = content.slice(0, ci).trim();
+				const val = content.slice(ci + 1).trim();
+				if (val === '|' || val === '>') {
+					blockKey = key;
+					obj[key] = '';
+				} else {
+					obj[key] = stripYamlQuotes(val);
+				}
+			}
+			continue;
+		}
+
+		// Block scalar continuation
+		if (blockKey) {
+			const lineIndent = line.search(/\S/);
+			if (lineIndent === -1) { obj[blockKey] += '\n'; continue; } // blank line in block
+			if (lineIndent > blockIndent) {
+				obj[blockKey] = obj[blockKey] ? obj[blockKey] + '\n' + line.trim() : line.trim();
+				continue;
+			}
+			blockKey = '';
+		}
+
+		// Object property ("    agent: value")
+		const propMatch = line.match(/^\s+([\w][\w-]*)\s*:\s*(.*)/);
+		if (propMatch) {
+			const key = propMatch[1]!.trim();
+			const val = propMatch[2]!.trim();
+			if (val === '|' || val === '>') {
+				blockKey = key;
+				blockIndent = line.search(/\S/);
+				obj[key] = '';
+			} else {
+				obj[key] = stripYamlQuotes(val);
+			}
+		}
+	}
+	flush();
+	return handoffs;
+}
+
+function stripYamlQuotes(s: string): string {
+	if ((s.startsWith('"') && s.endsWith('"')) || (s.startsWith("'") && s.endsWith("'"))) {
+		return s.slice(1, -1);
+	}
+	return s;
 }
 
 /**
@@ -64,15 +178,17 @@ export async function loadAgents(app: App, agentsFolder: string): Promise<AgentC
 	for (let i = 0; i < agentFiles.length; i++) {
 		const child = agentFiles[i]!;
 		const content = contents[i]!;
-		const {meta, body} = parseFrontmatter(content);
+		const {meta, body, rawYaml} = parseFrontmatter(content);
 		const rawTools = meta['tools'];
 		const rawSkills = meta['skills'];
+		const handoffs = parseHandoffsBlock(rawYaml);
 		agents.push({
 			name: (typeof meta['name'] === 'string' ? meta['name'] : '') || child.basename.replace('.agent', ''),
 			description: (typeof meta['description'] === 'string' ? meta['description'] : '') || '',
 			model: (typeof meta['model'] === 'string' && meta['model']) || undefined,
 			tools: Array.isArray(rawTools) ? rawTools : (typeof rawTools === 'string' && rawTools ? rawTools.split(',').map(t => t.trim()).filter(Boolean) : ('tools' in meta ? [] : undefined)),
 			skills: Array.isArray(rawSkills) ? rawSkills : (typeof rawSkills === 'string' && rawSkills ? rawSkills.split(',').map(s => s.trim()).filter(Boolean) : ('skills' in meta ? [] : undefined)),
+			handoffs,
 			instructions: body.trim(),
 			filePath: child.path,
 		});
@@ -269,6 +385,32 @@ export async function loadMcpServers(
 }
 
 /**
+ * Load all instruction files (*.instructions.md) from the given vault folder.
+ * Returns concatenated instruction text to be prepended to every session system message.
+ */
+export async function loadInstructions(app: App, sidekickFolder: string): Promise<string> {
+	const folder = normalizePath(sidekickFolder);
+	const abstract = app.vault.getAbstractFileByPath(folder);
+	if (!(abstract instanceof TFolder)) return '';
+
+	const instructionFiles = abstract.children.filter(
+		(child): child is TFile => child instanceof TFile && child.extension === 'md' && child.name.endsWith('.instructions.md')
+	);
+	if (instructionFiles.length === 0) return '';
+
+	// Sort by name for deterministic order
+	instructionFiles.sort((a, b) => a.name.localeCompare(b.name));
+	const contents = await Promise.all(instructionFiles.map(f => app.vault.read(f)));
+
+	const parts: string[] = [];
+	for (let i = 0; i < instructionFiles.length; i++) {
+		const body = contents[i]!.trim();
+		if (body) parts.push(body);
+	}
+	return parts.join('\n\n');
+}
+
+/**
  * Load all trigger configurations from *.trigger.md files in the given vault folder.
  */
 export async function loadTriggers(app: App, triggersFolder: string): Promise<TriggerConfig[]> {
@@ -298,9 +440,11 @@ export async function loadTriggers(app: App, triggersFolder: string): Promise<Tr
 			name: (typeof meta['name'] === 'string' && meta['name']) || id,
 			description: (typeof meta['description'] === 'string' && meta['description']) || undefined,
 			agent: (typeof meta['agent'] === 'string' && meta['agent']) || undefined,
+			model: (typeof meta['model'] === 'string' && meta['model']) || undefined,
 			enabled: String(meta['enabled']).toLowerCase() !== 'false',
 			cron: (typeof meta['cron'] === 'string' && meta['cron']) || undefined,
 			glob: (typeof meta['glob'] === 'string' && meta['glob']) || undefined,
+			icon: (typeof meta['icon'] === 'string' && meta['icon']) || undefined,
 			content: body,
 			filePath: child.path,
 		});

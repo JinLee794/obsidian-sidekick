@@ -238,7 +238,13 @@ export function installSessionSidebar(ViewClass: {prototype: unknown}): void {
 		if (isActive) item.addClass('is-active');
 
 		const sessionType = this.getSessionType(session);
-		const iconName = sessionType === 'chat' ? 'message-square' : sessionType === 'trigger' ? 'zap' : sessionType === 'inline' ? 'file-text' : sessionType === 'search' ? 'search' : 'code';
+		let iconName = sessionType === 'chat' ? 'message-square' : sessionType === 'trigger' ? 'zap' : sessionType === 'inline' ? 'file-text' : sessionType === 'search' ? 'search' : 'code';
+		// Extract custom icon from trigger session name: [trigger:icon-name]
+		if (sessionType === 'trigger') {
+			const raw = this.sessionNames[session.sessionId] || '';
+			const iconMatch = raw.match(/^\[trigger:([a-z0-9-]+)\]/);
+			if (iconMatch) iconName = iconMatch[1]!;
+		}
 		const iconEl = item.createSpan({cls: 'sidekick-session-icon'});
 		setIcon(iconEl, iconName);
 
@@ -269,8 +275,8 @@ export function installSessionSidebar(ViewClass: {prototype: unknown}): void {
 		const raw = this.sessionNames[session.sessionId]
 			|| session.summary
 			|| `Session ${session.sessionId.slice(0, 8)}`;
-		// Strip session type prefix for display
-		return raw.replace(/^\[(chat|inline|trigger|search)\]\s*/, '');
+		// Strip session type prefix for display (including trigger icon variant)
+		return raw.replace(/^\[(chat|inline|trigger(?::[a-z0-9-]+)?|search)\]\s*/, '');
 	};
 
 	proto.getSessionType = function (session: SessionMetadata): 'chat' | 'inline' | 'trigger' | 'search' | 'other' {
@@ -278,7 +284,7 @@ export function installSessionSidebar(ViewClass: {prototype: unknown}): void {
 		debugTrace(`Sidekick: getSessionType id=${session.sessionId.slice(0, 8)} name="${name.slice(0, 40)}"`);
 		if (name.startsWith('[chat]')) return 'chat';
 		if (name.startsWith('[inline]')) return 'inline';
-		if (name.startsWith('[trigger]')) return 'trigger';
+		if (name.startsWith('[trigger]') || name.startsWith('[trigger:')) return 'trigger';
 		if (name.startsWith('[search]')) return 'search';
 		return 'other';
 	};
@@ -598,7 +604,7 @@ export function installSessionSidebar(ViewClass: {prototype: unknown}): void {
 	proto.restoreAgentFromSessionName = function (sessionId: string): void {
 		let sessionName = this.sessionNames[sessionId] || '';
 		// Strip session type prefix
-		sessionName = sessionName.replace(/^\[(chat|inline|trigger|search)\]\s*/, '');
+		sessionName = sessionName.replace(/^\[(chat|inline|trigger(?::[a-z0-9-]+)?|search)\]\s*/, '');
 		const colonIdx = sessionName.indexOf(':');
 		if (colonIdx > 0) {
 			const agentName = sessionName.substring(0, colonIdx).trim();

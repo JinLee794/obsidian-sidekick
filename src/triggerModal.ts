@@ -1,5 +1,6 @@
 import {App, Modal, Notice, Setting, normalizePath, setIcon} from 'obsidian';
 import type {AgentConfig} from './types';
+import type {ModelInfo} from './copilot';
 
 /** Cron schedule preset for quick selection. */
 interface CronPreset {
@@ -14,7 +15,10 @@ const CRON_PRESETS: CronPreset[] = [
 	{label: 'Every hour', cron: '0 * * * *', description: 'Runs at the top of every hour'},
 	{label: 'Every 30 minutes', cron: '*/30 * * * *', description: 'Runs every half-hour'},
 	{label: 'Weekdays at 9 AM', cron: '0 9 * * 1-5', description: 'Mon–Fri at 09:00'},
+	{label: 'Sunday evening at 5 PM', cron: '0 17 * * 0', description: 'Every Sunday at 17:00'},
 	{label: 'Every Monday at 9 AM', cron: '0 9 * * 1', description: 'Weekly on Monday at 09:00'},
+	{label: 'Every Friday at 4 PM', cron: '0 16 * * 5', description: 'End-of-week wrap-up, every Friday at 16:00'},
+	{label: 'Twice a day (8 AM & 8 PM)', cron: '0 8,20 * * *', description: 'Runs at 08:00 and 20:00 daily'},
 	{label: 'First of the month', cron: '0 9 1 * *', description: '1st of each month at 09:00'},
 	{label: 'Custom', cron: '', description: 'Enter a custom 5-field cron expression'},
 ];
@@ -111,6 +115,7 @@ export interface NewTriggerResult {
  */
 export class NewTriggerModal extends Modal {
 	private agents: AgentConfig[];
+	private models: ModelInfo[];
 	private triggersFolder: string;
 	private onCreated: () => void;
 
@@ -118,12 +123,14 @@ export class NewTriggerModal extends Modal {
 	private triggerName = '';
 	private description = '';
 	private selectedAgent = '';
+	private selectedModel = '';
 	private scheduleType: 'cron' | 'glob' | 'both' = 'cron';
 	private selectedPreset = 0; // index into CRON_PRESETS
 	private customCron = '';
 	private glob = '';
 	private prompt = '';
 	private enabled = true;
+	private selectedIcon = 'zap';
 
 	// UI elements for dynamic updates
 	private promptIssuesEl!: HTMLElement;
@@ -133,9 +140,10 @@ export class NewTriggerModal extends Modal {
 	private cronErrorEl!: HTMLElement;
 	private createBtn!: HTMLButtonElement;
 
-	constructor(app: App, agents: AgentConfig[], triggersFolder: string, onCreated: () => void) {
+	constructor(app: App, agents: AgentConfig[], models: ModelInfo[], triggersFolder: string, onCreated: () => void) {
 		super(app);
 		this.agents = agents;
+		this.models = models;
 		this.triggersFolder = triggersFolder;
 		this.onCreated = onCreated;
 	}
@@ -179,6 +187,56 @@ export class NewTriggerModal extends Modal {
 				text.onChange(v => { this.description = v; });
 			});
 
+		// ── Icon ─────────────────────────────────────────────
+		const TRIGGER_ICON_CHOICES: {value: string; label: string}[] = [
+			{value: 'zap', label: 'Zap (default)'},
+			{value: 'clock', label: 'Clock'},
+			{value: 'calendar', label: 'Calendar'},
+			{value: 'bell', label: 'Bell'},
+			{value: 'star', label: 'Star'},
+			{value: 'heart', label: 'Heart'},
+			{value: 'bookmark', label: 'Bookmark'},
+			{value: 'flag', label: 'Flag'},
+			{value: 'target', label: 'Target'},
+			{value: 'rocket', label: 'Rocket'},
+			{value: 'brain', label: 'Brain'},
+			{value: 'eye', label: 'Eye'},
+			{value: 'file-text', label: 'File'},
+			{value: 'folder', label: 'Folder'},
+			{value: 'mail', label: 'Mail'},
+			{value: 'megaphone', label: 'Megaphone'},
+			{value: 'shield', label: 'Shield'},
+			{value: 'sun', label: 'Sun'},
+			{value: 'moon', label: 'Moon'},
+			{value: 'cloud', label: 'Cloud'},
+			{value: 'database', label: 'Database'},
+			{value: 'git-branch', label: 'Git branch'},
+			{value: 'list-checks', label: 'Checklist'},
+			{value: 'activity', label: 'Activity'},
+			{value: 'alert-circle', label: 'Alert'},
+			{value: 'archive', label: 'Archive'},
+			{value: 'bar-chart-2', label: 'Chart'},
+			{value: 'refresh-cw', label: 'Refresh'},
+			{value: 'send', label: 'Send'},
+			{value: 'sparkles', label: 'Sparkles'},
+		];
+		const iconSetting = new Setting(contentEl)
+			.setName('Icon')
+			.setDesc('Icon shown in session history for this trigger.');
+		const iconPreview = iconSetting.controlEl.createSpan({cls: 'sidekick-trigger-icon-preview'});
+		setIcon(iconPreview, this.selectedIcon);
+		iconSetting.addDropdown(dd => {
+			for (const {value, label} of TRIGGER_ICON_CHOICES) {
+				dd.addOption(value, label);
+			}
+			dd.setValue(this.selectedIcon);
+			dd.onChange(v => {
+				this.selectedIcon = v;
+				iconPreview.empty();
+				setIcon(iconPreview, v);
+			});
+		});
+
 		// ── Agent ────────────────────────────────────────────
 		new Setting(contentEl)
 			.setName('Agent')
@@ -189,6 +247,18 @@ export class NewTriggerModal extends Modal {
 					dd.addOption(agent.name, agent.name);
 				}
 				dd.onChange(v => { this.selectedAgent = v; });
+			});
+
+		// ── Model ────────────────────────────────────────────
+		new Setting(contentEl)
+			.setName('Model')
+			.setDesc('Which model to use when this trigger fires. Leave as default to use the agent or session model.')
+			.addDropdown(dd => {
+				dd.addOption('', '(Default)');
+				for (const model of this.models) {
+					dd.addOption(model.id, model.name || model.id);
+				}
+				dd.onChange(v => { this.selectedModel = v; });
 			});
 
 		// ── Schedule type ────────────────────────────────────
@@ -244,6 +314,35 @@ export class NewTriggerModal extends Modal {
 				});
 			});
 
+		// Human-readable cron examples
+		const cronExamples = cronSection.createDiv({cls: 'sidekick-trigger-cron-examples'});
+		cronExamples.createEl('span', {text: 'Examples: ', cls: 'sidekick-trigger-cron-examples-label'});
+		const examples = [
+			{cron: '0 7 * * *', label: 'Every day at 7 AM'},
+			{cron: '0 17 * * 0', label: 'Sunday at 5 PM'},
+			{cron: '30 9 * * 1-5', label: 'Weekdays at 9:30 AM'},
+			{cron: '0 */2 * * *', label: 'Every 2 hours'},
+		];
+		for (const ex of examples) {
+			const chip = cronExamples.createEl('button', {
+				text: ex.label,
+				cls: 'sidekick-trigger-cron-example-chip',
+				attr: {type: 'button'},
+			});
+			chip.addEventListener('click', () => {
+				this.customCron = ex.cron;
+				// Switch to Custom preset
+				this.selectedPreset = CRON_PRESETS.length - 1;
+				const presetDropdown = cronSection.querySelector('select') as HTMLSelectElement | null;
+				if (presetDropdown) presetDropdown.value = String(this.selectedPreset);
+				// Update the custom cron text input
+				const customInput = this.cronCustomRow.querySelector('input') as HTMLInputElement | null;
+				if (customInput) customInput.value = ex.cron;
+				this.updateCronPreview();
+				this.validateForm();
+			});
+		}
+
 		this.cronErrorEl = cronSection.createDiv({cls: 'sidekick-trigger-field-error'});
 
 		// ── Glob section ─────────────────────────────────────
@@ -294,6 +393,12 @@ export class NewTriggerModal extends Modal {
 					this.enabled = v;
 				});
 			});
+
+		// ── AI editing tip ────────────────────────────────────
+		const aiTip = contentEl.createDiv({cls: 'sidekick-trigger-ai-tip'});
+		const tipIcon = aiTip.createSpan({cls: 'sidekick-trigger-ai-tip-icon'});
+		setIcon(tipIcon, 'sparkles');
+		aiTip.createSpan({text: 'After creating, you can open the trigger file and ask Sidekick to refine it — e.g. "change this trigger to run every Sunday at 5 PM" or "make it only run on weekdays".'});
 
 		// ── Actions ──────────────────────────────────────────
 		const actions = contentEl.createDiv({cls: 'sidekick-trigger-actions'});
@@ -419,6 +524,8 @@ export class NewTriggerModal extends Modal {
 		fmLines.push(`name: ${name}`);
 		if (this.description.trim()) fmLines.push(`description: ${this.description.trim()}`);
 		if (this.selectedAgent) fmLines.push(`agent: ${this.selectedAgent}`);
+		if (this.selectedModel) fmLines.push(`model: ${this.selectedModel}`);
+		if (this.selectedIcon && this.selectedIcon !== 'zap') fmLines.push(`icon: ${this.selectedIcon}`);
 
 		if (this.scheduleType === 'cron' || this.scheduleType === 'both') {
 			fmLines.push(`cron: "${this.getEffectiveCron()}"`);
@@ -454,6 +561,16 @@ function describeCronExpression(cron: string): string {
 	const everyMin = min!.match(/^\*\/(\d+)$/);
 	if (everyMin && hour === '*' && dom === '*' && mon === '*' && dow === '*') {
 		return `Every ${everyMin[1]} minute(s)`;
+	}
+	// Every N hours: 0 */2 * * *
+	const everyHour = hour!.match(/^\*\/(\d+)$/);
+	if (/^\d+$/.test(min!) && everyHour && dom === '*' && mon === '*' && dow === '*') {
+		return `Every ${everyHour[1]} hour(s) at :${min!.padStart(2, '0')}`;
+	}
+	// Multiple times daily: 0 8,20 * * *
+	if (/^\d+$/.test(min!) && /^[\d,]+$/.test(hour!) && hour!.includes(',') && dom === '*' && mon === '*' && dow === '*') {
+		const hours = hour!.split(',').map(h => `${h.padStart(2, '0')}:${min!.padStart(2, '0')}`);
+		return `Daily at ${hours.join(' & ')}`;
 	}
 	if (/^\d+$/.test(min!) && /^\d+$/.test(hour!) && dom === '*' && mon === '*' && dow === '*') {
 		return `Daily at ${hour!.padStart(2, '0')}:${min!.padStart(2, '0')}`;

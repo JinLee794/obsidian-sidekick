@@ -117,6 +117,10 @@ export const DEFAULT_SETTINGS: SidekickSettings = {
 	searchMode: 'basic',
 	contextMode: 'suggest',
 	agentTriage: true,
+	telegramBotId: '',
+	telegramBotToken: '',
+	telegramAllowedUsers: '',
+	telegramDefaultAgent: '',
 }
 
 /** Fields stored in vault-specific local storage instead of data.json. */
@@ -204,6 +208,161 @@ glob: "**/*.md"
 enabled: true
 ---
 Help me prepare my day, including asks on me, recommendations for clear actions to prepare, and suggestions on which items to prioritize over others.
+`;
+
+export const HELP_MD_CONTENT = `# Sidekick reference
+
+This file lists every frontmatter property recognised by Sidekick.
+Edit the examples in the sub-folders to customise your setup.
+
+---
+
+## Agents (\`*.agent.md\` in \`agents/\`)
+
+| Property | Type | Required | Description |
+|---|---|---|---|
+| \`name\` | string | no | Display name. Defaults to the filename (minus \`.agent.md\`). |
+| \`description\` | string | no | Short description shown in the agent picker and /agents list. |
+| \`model\` | string | no | Model ID to use for this agent (e.g. \`gpt-4o\`, \`Claude Sonnet 4.5\`). Overrides the session default. |
+| \`tools\` | list | no | MCP server names and/or sub-agent names to enable. Empty list = no tools. Omit the property = all tools. |
+| \`skills\` | list | no | Skill names to enable for this agent. Empty list = no skills. Omit = all skills. |
+
+The body (everything below the \`---\` block) is the agent's **system instructions**.
+
+### Example
+
+\`\`\`yaml
+---
+name: Coder
+description: Helps write and review code
+model: gpt-4o
+tools:
+  - github
+skills:
+  - ascii-art
+---
+You are a coding assistant. Always explain your changes.
+\`\`\`
+
+---
+
+## Skills (\`SKILL.md\` inside a sub-folder of \`skills/\`)
+
+| Property | Type | Required | Description |
+|---|---|---|---|
+| \`name\` | string | no | Skill name. Defaults to the folder name. |
+| \`description\` | string | no | Short description of what the skill does. |
+
+The body contains the skill instructions injected when the skill is active.
+
+### Example
+
+\`\`\`yaml
+---
+name: ascii-art
+description: Generates stylised ASCII art text
+---
+# ASCII Art Generator
+Generate block-style ASCII art for any requested text.
+\`\`\`
+
+---
+
+## Prompts (\`*.prompt.md\` in \`prompts/\`)
+
+| Property | Type | Required | Description |
+|---|---|---|---|
+| \`agent\` | string | no | Agent to auto-select when this prompt is used. |
+| \`description\` | string | no | Short description shown in the prompt picker. |
+
+The body is the prompt content prepended to the user's message.
+
+### Example
+
+\`\`\`yaml
+---
+agent: Grammar
+description: Translate text from English to Portuguese
+---
+Translate the provided text from English to Portuguese.
+\`\`\`
+
+---
+
+## Triggers (\`*.trigger.md\` in \`triggers/\`)
+
+| Property | Type | Required | Description |
+|---|---|---|---|
+| \`name\` | string | no | Display name. Defaults to the filename (minus \`.trigger.md\`). |
+| \`description\` | string | no | What this trigger does. |
+| \`agent\` | string | no | Agent to use when the trigger fires. |
+| \`model\` | string | no | Model ID override for this trigger. |
+| \`enabled\` | boolean | no | Whether the trigger is active. Defaults to \`true\`. |
+| \`cron\` | string | no | 5-field cron expression for scheduled triggers (min hour dom month dow). |
+| \`glob\` | string | no | Glob pattern for file-change triggers (e.g. \`**/*.md\`). |
+| \`icon\` | string | no | Lucide icon name shown in session history (default: \`zap\`). |
+
+The body is the prompt content sent when the trigger fires.
+
+### Example
+
+\`\`\`yaml
+---
+name: Daily planner
+description: Prepares a plan for the day every morning
+agent: Planner
+model: gpt-4o
+cron: "0 8 * * *"
+enabled: true
+icon: calendar
+---
+Help me prepare my day.
+\`\`\`
+
+---
+
+## Instructions (\`*.instructions.md\` in the sidekick root folder)
+
+No frontmatter properties — the entire file content is prepended to every session as a system instruction.
+
+---
+
+## MCP Servers (\`tools/mcp.json\`)
+
+JSON file with \`servers\` (or \`mcpServers\`) and optional \`inputs\` for variable placeholders.
+
+\`\`\`json
+{
+  "inputs": [
+    { "id": "my-token", "description": "API token", "password": true }
+  ],
+  "servers": {
+    "github": {
+      "type": "http",
+      "url": "https://api.githubcopilot.com/mcp/"
+    }
+  }
+}
+\`\`\`
+
+---
+
+## Slash commands
+
+| Command | Description |
+|---|---|
+| \`/help\` | Show available commands, agents, and prompts |
+| \`/reference\` | Show this property reference |
+| \`/agents\` | List available agents |
+| \`/models\` | List available models |
+| \`/model <name>\` | Switch model |
+| \`/agent <name>\` | Switch agent |
+| \`/clear\` | Clear conversation and start fresh |
+| \`/new\` | Start a new conversation (keeps history) |
+| \`/trigger-debug\` | Show trigger diagnostic info |
+| \`/tasks\` | Show active and recent tasks |
+
+Type \`@agent-name\` in a message to delegate to a specific agent.
 `;
 
 export class SidekickSettingTab extends PluginSettingTab {
@@ -663,7 +822,12 @@ export class SidekickSettingTab extends PluginSettingTab {
 							await this.app.vault.create(triggerPath, SAMPLE_TRIGGER_CONTENT);
 						}
 
-						new Notice('Sidekick folder initialized with sample agent, skill, prompt, trigger, and mcp.json.');
+						const helpPath = normalizePath(`${base}/HELP.md`);
+						if (!this.app.vault.getAbstractFileByPath(helpPath)) {
+							await this.app.vault.create(helpPath, HELP_MD_CONTENT);
+						}
+
+						new Notice('Sidekick folder initialized with sample agent, skill, prompt, trigger, mcp.json, and HELP.md.');
 					} catch (e) {
 						new Notice(`Failed to initialize sidekick folder: ${String(e)}`);
 					}

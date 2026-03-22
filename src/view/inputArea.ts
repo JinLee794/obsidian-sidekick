@@ -30,6 +30,8 @@ declare module '../sidekickView' {
 		setWorkingDir(folderPath: string): void;
 		setPromptText(text: string): void;
 		addSelectionAttachment(text: string, info: SelectionInfo): void;
+		/** Temporary stash for merged built-in + prompt items in the dropdown. */
+		_promptDropdownItems?: Array<{name: string; description?: string; content: string; agent?: string; isBuiltin: boolean}>;
 	}
 }
 
@@ -608,12 +610,24 @@ export function installInputArea(ViewClass: {prototype: unknown}): void {
 			return;
 		}
 		const query = value.slice(1).toLowerCase();
-		const filtered = this.prompts.filter(p => p.name.toLowerCase().includes(query));
-		if (filtered.length === 0) {
+
+		// Merge built-in commands with user-defined prompts
+		const builtinCommands = (this.constructor as {BUILTIN_COMMANDS?: Array<{name: string; description: string}>}).BUILTIN_COMMANDS ?? [];
+		const builtinMatches = builtinCommands
+			.filter(c => c.name.toLowerCase().includes(query))
+			.map(c => ({name: c.name, description: c.description, content: '', isBuiltin: true as const}));
+		const promptMatches = this.prompts
+			.filter(p => p.name.toLowerCase().includes(query))
+			.map(p => ({...p, isBuiltin: false as const}));
+		const combined = [...builtinMatches, ...promptMatches];
+
+		if (combined.length === 0) {
 			this.closePromptDropdown();
 			return;
 		}
-		this.showPromptDropdown(filtered);
+		this.showPromptDropdown(combined as PromptConfig[]);
+		// Stash for selectPromptFromDropdown
+		this._promptDropdownItems = combined;
 	};
 
 	proto.showPromptDropdown = function (prompts: PromptConfig[]): void {
@@ -622,18 +636,24 @@ export function installInputArea(ViewClass: {prototype: unknown}): void {
 		this.promptDropdown.addClass('sidekick-prompt-dropdown');
 		this.promptDropdownIndex = 0;
 
-		for (let i = 0; i < prompts.length; i++) {
-			const p = prompts[i];
+		// Use the stashed merged items if available (includes isBuiltin flag)
+		const items = (this._promptDropdownItems as Array<{name: string; description?: string; content: string; agent?: string; isBuiltin: boolean}>) || prompts.map(p => ({...p, isBuiltin: false}));
+
+		for (let i = 0; i < items.length; i++) {
+			const p = items[i];
 			if (!p) continue;
-			const item = this.promptDropdown.createDiv({cls: 'sidekick-prompt-item'});
+			const item = this.promptDropdown.createDiv({cls: 'sidekick-prompt-item' + (p.isBuiltin ? ' sidekick-prompt-builtin' : '')});
 			if (i === 0) item.addClass('is-selected');
-			item.setAttribute('title', p.content);
+			item.setAttribute('title', p.isBuiltin ? (p.description ?? '') : (p.content || ''));
 
 			item.createSpan({cls: 'sidekick-prompt-item-name', text: `/${p.name}`});
-			const descText = p.description || (p.content.length > 60 ? p.content.slice(0, 60) + '…' : p.content);
+			const descText = p.description || (p.content && p.content.length > 60 ? p.content.slice(0, 60) + '…' : p.content || '');
 			item.createSpan({cls: 'sidekick-prompt-item-desc', text: descText});
-			if (p.agent) {
+			if (!p.isBuiltin && p.agent) {
 				item.createSpan({cls: 'sidekick-prompt-item-agent', text: p.agent});
+			}
+			if (p.isBuiltin) {
+				item.createSpan({cls: 'sidekick-prompt-item-badge', text: 'built-in'});
 			}
 
 			item.addEventListener('click', () => {
@@ -679,16 +699,29 @@ export function installInputArea(ViewClass: {prototype: unknown}): void {
 
 	proto.selectPromptFromDropdown = function (): void {
 		if (!this.promptDropdown) return;
-		const value = this.inputEl.value;
-		const query = value.startsWith('/') ? value.slice(1).toLowerCase() : '';
-		const filtered = this.prompts.filter(p => p.name.toLowerCase().includes(query));
-		const selected = filtered[this.promptDropdownIndex];
+
+		// Use the stashed merged items from handlePromptTrigger
+		const items = this._promptDropdownItems as Array<{name: string; description?: string; content: string; agent?: string; isBuiltin: boolean}> | undefined;
+		if (!items) {
+			this.closePromptDropdown();
+			return;
+		}
+		const selected = items[this.promptDropdownIndex];
 		if (!selected) {
 			this.closePromptDropdown();
 			return;
 		}
 
-		this.activePrompt = selected;
+		if (selected.isBuiltin) {
+			// Execute built-in command immediately
+			this.inputEl.value = '';
+			this.closePromptDropdown();
+			this._promptDropdownItems = undefined;
+			this.executeBuiltinCommand(selected.name);
+			return;
+		}
+
+		this.activePrompt = selected as PromptConfig;
 
 		// Auto-select the prompt's agent
 		if (selected.agent) {
@@ -702,6 +735,7 @@ export function installInputArea(ViewClass: {prototype: unknown}): void {
 		this.inputEl.setCssProps({'--input-height': Math.min(this.inputEl.scrollHeight, 200) + 'px'});
 		this.inputEl.focus();
 		this.closePromptDropdown();
+		this._promptDropdownItems = undefined;
 	};
 
 	// ── Public API ───────────────────────────────────────────────

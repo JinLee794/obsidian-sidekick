@@ -12,8 +12,29 @@ export interface AgentConfig {
 	tools?: string[];
 	/** List of skill names to enable. Empty/undefined = all. */
 	skills?: string[];
+	/**
+	 * Structured handoff definitions for this agent.
+	 * undefined = can delegate to all other agents (no handoff buttons).
+	 * Empty array = cannot delegate to any agent.
+	 * When defined, handoff buttons appear after the agent's response.
+	 */
+	handoffs?: HandoffConfig[];
 	instructions: string;
 	filePath: string;
+}
+
+/** Rich handoff configuration matching VS Code Copilot agent spec. */
+export interface HandoffConfig {
+	/** Display text shown on the handoff button. */
+	label: string;
+	/** Target agent name to switch to. */
+	agent: string;
+	/** Prompt text to send to the target agent. */
+	prompt?: string;
+	/** Whether to auto-submit the prompt (default false). */
+	send?: boolean;
+	/** Optional model override for the handoff. */
+	model?: string;
 }
 
 /** Parsed skill information from a skill folder's SKILL.md. */
@@ -109,12 +130,16 @@ export interface TriggerConfig {
 	name: string;
 	description?: string;
 	agent?: string;
+	/** Model ID to use when this trigger fires. Overrides the agent/session default. */
+	model?: string;
 	/** Whether the trigger is active. Defaults to true when not set. */
 	enabled: boolean;
 	/** Cron expression for scheduled triggers (5-field: min hour dom month dow). */
 	cron?: string;
 	/** Glob pattern for file-change triggers. */
 	glob?: string;
+	/** Lucide icon name shown in session history. Defaults to 'zap'. */
+	icon?: string;
 	/** Prompt content to send when the trigger fires. */
 	content: string;
 	/** Vault-relative path to the trigger file. */

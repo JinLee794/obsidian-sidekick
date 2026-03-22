@@ -4,12 +4,15 @@ import type {ModelInfo, ReasoningEffort} from '../copilot';
 import type {AgentConfig} from '../types';
 import {FolderTreeModal} from '../modals';
 import {EditModal} from '../modals/editModal';
+import {AgentEditorModal} from '../modals/agentEditorModal';
+import type {AgentEditorContext} from '../modals/agentEditorModal';
 import {setDebugEnabled} from '../debug';
 
 declare module '../sidekickView' {
 	interface SidekickView {
 		buildConfigToolbar(parent: HTMLElement): void;
 		populateModelSelect(): void;
+		refreshModels(): Promise<void>;
 		getSelectedModelInfo(): ModelInfo | undefined;
 		openReasoningMenu(e: MouseEvent): void;
 		updateReasoningBadge(): void;
@@ -23,6 +26,7 @@ declare module '../sidekickView' {
 		updateCwdButton(): void;
 		openEditFromChat(): void;
 		resolveModelForAgent(agent: AgentConfig | undefined, fallback: string | undefined): string | undefined;
+		openAgentEditor(agent?: AgentConfig): void;
 	}
 }
 
@@ -46,6 +50,14 @@ export function installConfigToolbar(ViewClass: { prototype: unknown }): void {
 			this.selectAgent(this.agentSelect.value);
 		});
 
+		// Agent edit button
+		const agentEditBtn = agentGroup.createEl('button', {cls: 'clickable-icon sidekick-icon-btn sidekick-agent-edit-btn', attr: {title: 'Edit agent'}});
+		setIcon(agentEditBtn, 'pencil');
+		agentEditBtn.addEventListener('click', () => {
+			const agent = this.selectedAgent ? this.agents.find((a: AgentConfig) => a.name === this.selectedAgent) : undefined;
+			this.openAgentEditor(agent);
+		});
+
 		// Model dropdown
 		const modelGroup = toolbar.createDiv({cls: 'sidekick-toolbar-group'});
 		this.modelIconEl = modelGroup.createSpan({cls: 'sidekick-toolbar-icon clickable-icon'});
@@ -56,6 +68,9 @@ export function installConfigToolbar(ViewClass: { prototype: unknown }): void {
 			this.selectedModel = this.modelSelect.value;
 			this.configDirty = true;
 			this.updateReasoningBadge();
+		});
+		this.modelSelect.addEventListener('mousedown', () => {
+			if (this.models.length === 0) void this.refreshModels();
 		});
 
 		// Skills button
@@ -98,9 +113,38 @@ export function installConfigToolbar(ViewClass: { prototype: unknown }): void {
 
 	proto.populateModelSelect = function(): void {
 		this.modelSelect.empty();
+		if (this.models.length === 0) {
+			const placeholder = this.modelSelect.createEl('option', {text: 'No models — click to retry'});
+			placeholder.value = '';
+			placeholder.disabled = true;
+		}
 		for (const model of this.models) {
 			const opt = this.modelSelect.createEl('option', {text: model.name});
 			opt.value = model.id;
+		}
+	};
+
+	proto.refreshModels = async function(): Promise<void> {
+		const preset = this.plugin.settings.providerPreset;
+		const isByok = preset !== 'github';
+		if (isByok && this.plugin.settings.providerModel) {
+			const id = this.plugin.settings.providerModel;
+			this.models = [{id, name: id} as ModelInfo];
+		} else if (isByok) {
+			return;
+		} else if (this.plugin.copilot) {
+			try {
+				this.models = await this.plugin.copilot.listModels();
+			} catch (err) {
+				console.warn('Sidekick: failed to refresh models', err);
+			}
+		}
+		this.populateModelSelect();
+		if (this.models.length > 0 && this.models[0]) {
+			this.selectedModel = this.models[0].id;
+			this.modelSelect.value = this.selectedModel;
+			this.configDirty = true;
+			this.updateReasoningBadge();
 		}
 	};
 
@@ -338,5 +382,26 @@ export function installConfigToolbar(ViewClass: { prototype: unknown }): void {
 			);
 		}
 		return match ? match.id : fallback;
+	};
+
+	proto.openAgentEditor = function(agent?: AgentConfig): void {
+		// Ensure models are loaded before opening the editor
+		const open = () => {
+			const context: AgentEditorContext = {
+				agents: this.agents,
+				skills: this.skills,
+				mcpServers: this.mcpServers,
+				models: this.models,
+				agentsFolder: this.getAgentsFolder(),
+			};
+			new AgentEditorModal(this.app, context, agent ?? null, () => {
+				void this.loadAllConfigs({silent: true});
+			}).open();
+		};
+		if (this.models.length === 0) {
+			void this.refreshModels().then(open);
+		} else {
+			open();
+		}
 	};
 }

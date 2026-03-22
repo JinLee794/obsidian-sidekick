@@ -4,6 +4,8 @@ import type {SessionMetadata} from '../copilot';
 import type {TriggerConfig} from '../types';
 import {TriggerScheduler} from '../triggerScheduler';
 import type {TriggerFireContext} from '../triggerScheduler';
+import {NewTriggerModal} from '../triggerModal';
+import {getTriggersFolder} from '../settings';
 import {debugTrace} from '../debug';
 import {describeCron, describeGlob} from './utils';
 import type {BackgroundSession} from './types';
@@ -99,6 +101,23 @@ export function installTriggersPanel(ViewClass: {prototype: unknown}): void {
 
 		const configControls = configHeader.createDiv({cls: 'sidekick-triggers-controls'});
 
+		// New trigger button
+		const newTriggerBtn = configControls.createEl('button', {
+			cls: 'clickable-icon sidekick-triggers-ctrl-btn',
+			attr: {title: 'New trigger'},
+		});
+		setIcon(newTriggerBtn, 'plus');
+		newTriggerBtn.addEventListener('click', () => {
+			const triggersFolder = getTriggersFolder(this.plugin.settings);
+			new NewTriggerModal(
+				this.app,
+				this.agents,
+				this.models,
+				triggersFolder,
+				() => void this.loadAllConfigs({silent: true}),
+			).open();
+		});
+
 		// Sort
 		const configSortBtn = configControls.createEl('button', {
 			cls: 'clickable-icon sidekick-triggers-ctrl-btn',
@@ -166,10 +185,10 @@ export function installTriggersPanel(ViewClass: {prototype: unknown}): void {
 		}
 	};
 
-	/** Parse agent name from a trigger session name. Format: "[trigger] Agent: content" */
+	/** Parse agent name from a trigger session name. Format: "[trigger] Agent: content" or "[trigger:icon] Agent: content" */
 	proto.parseTriggerAgent = function (session: SessionMetadata): string {
 		const raw = this.sessionNames[session.sessionId] || '';
-		const m = raw.match(/^\[trigger\]\s*([^:]+?):\s/);
+		const m = raw.match(/^\[trigger(?::[a-z0-9-]+)?\]\s*([^:]+?):\s/);
 		return m ? m[1]!.trim() : 'Chat';
 	};
 
@@ -230,7 +249,7 @@ export function installTriggersPanel(ViewClass: {prototype: unknown}): void {
 
 			// Icon with enabled/disabled dot (mirrors session list icon pattern)
 			const iconEl = item.createSpan({cls: 'sidekick-session-icon'});
-			setIcon(iconEl, 'zap');
+			setIcon(iconEl, trigger.icon || 'zap');
 			if (trigger.enabled) {
 				iconEl.createSpan({cls: 'sidekick-triggers-enabled-dot'});
 			}
@@ -245,6 +264,7 @@ export function installTriggersPanel(ViewClass: {prototype: unknown}): void {
 			const scheduleParts: string[] = [];
 			if (trigger.cron) scheduleParts.push(describeCron(trigger.cron));
 			if (trigger.glob) scheduleParts.push(describeGlob(trigger.glob));
+			if (trigger.model) scheduleParts.push(`Model: ${trigger.model}`);
 			if (scheduleParts.length === 0) scheduleParts.push('No schedule');
 			const scheduleText = scheduleParts.join(' · ');
 			details.createDiv({cls: 'sidekick-session-time', text: scheduleText});
@@ -304,7 +324,7 @@ export function installTriggersPanel(ViewClass: {prototype: unknown}): void {
 				pendingFilePaths.clear();
 				for (const p of paths) {
 					debugTrace(`Sidekick: vault file-change event (debounced): ${p}`);
-					this.triggerScheduler?.checkFileChangeTriggers(p);
+					this.triggerScheduler?.checkFileChangeTriggers(p, this.app);
 				}
 			}, FILE_CHANGE_DEBOUNCE);
 		};
@@ -341,19 +361,20 @@ export function installTriggersPanel(ViewClass: {prototype: unknown}): void {
 		}
 
 		try {
-			// Resolve agent and model
+			// Resolve agent and model — trigger-level model overrides agent/session default
 			const agent = trigger.agent ? this.agents.find(a => a.name === trigger.agent) : undefined;
-			const model = this.resolveModelForAgent(agent, this.selectedModel || undefined);
+			const model = trigger.model || this.resolveModelForAgent(agent, this.selectedModel || undefined);
 
 			const sessionConfig = this.buildSessionConfig({model, selectedAgentName: trigger.agent || undefined});
 
 			const session = await this.plugin.copilot.createSession(sessionConfig);
 			const sessionId = session.sessionId;
 
-			// Name the session: [trigger] <agent>: <content truncated>
+			// Name the session: [trigger:icon] <agent>: <content truncated>
 			const agentName = trigger.agent || 'Chat';
 			const truncatedContent = trigger.content.length > 40 ? trigger.content.slice(0, 40) + '…' : trigger.content;
-			const sessionName = `[trigger] ${agentName}: ${truncatedContent}`;
+			const triggerIcon = trigger.icon || 'zap';
+			const sessionName = `[trigger:${triggerIcon}] ${agentName}: ${truncatedContent}`;
 			this.sessionNames[sessionId] = sessionName;
 			this.saveSessionNames();
 
