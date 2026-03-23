@@ -24,4 +24,6 @@ export interface BackgroundSession {
 	streamingBodyEl: HTMLElement | null;
 	streamingWrapperEl: HTMLElement | null;
 	toolCallsContainer: HTMLElement | null;
+	/** Session-level context usage: latest input token count. */
+	sessionInputTokens: number;
 }

@@ -107,6 +107,12 @@ export class SidekickView extends ItemView {
 	activeToolCalls = new Map<string, {toolName: string; detailsEl: HTMLDetailsElement}>();
 	activeSubagentBlocks = new Map<string, HTMLElement>();
 
+	// ── Session-level context usage tracking ───────────────────
+	/** Latest input token count from the most recent turn — reflects current context window usage. */
+	sessionInputTokens = 0;
+	/** Whether the context usage banner has been dismissed for the current session. */
+	contextBannerDismissed = false;
+
 	// ── Session sidebar state ──────────────────────────────────
 	activeSessions = new Map<string, BackgroundSession>();
 	sessionList: import('./copilot').SessionMetadata[] = [];
@@ -181,6 +187,9 @@ export class SidekickView extends ItemView {
 	debugBtnEl!: HTMLElement;
 	streamingComponent: Component | null = null;
 	streamingWrapperEl: HTMLElement | null = null;
+
+	// ── Context usage banner ─────────────────────────────────────
+	contextBannerEl!: HTMLElement;
 
 	// ── Config file watcher ──────────────────────────────────────
 	configRefreshTimer: ReturnType<typeof setTimeout> | null = null;
@@ -307,6 +316,9 @@ export class SidekickView extends ItemView {
 		// Chat history (scrollable)
 		this.chatContainer = chatContent.createDiv({cls: 'sidekick-chat sidekick-hide-debug'});
 		this.renderWelcome();
+
+		// Context usage banner (between chat and input)
+		this.contextBannerEl = chatContent.createDiv({cls: 'sidekick-context-banner is-hidden'});
 
 		// Bottom panel
 		const bottom = chatContent.createDiv({cls: 'sidekick-bottom'});
@@ -4620,6 +4632,8 @@ export class SidekickView extends ItemView {
 		this.scopePaths = [];
 		this.triageAgentForSession = null;
 		this.activePrompt = null;
+		this.sessionInputTokens = 0;
+		this.contextBannerDismissed = false;
 		this.inputEl.removeAttribute('title');
 		this.chatContainer.empty();
 		this.renderWelcome();
@@ -4627,9 +4641,84 @@ export class SidekickView extends ItemView {
 		this.rebuildSuggestions(false);
 		this.renderActiveNoteBar();
 		this.renderScopeBar();
+		this.renderContextBanner();
 		this.updateSendButton();
 		this.updateToolbarLock();
 		this.renderSessionList();
+	}
+
+	// ── Context usage banner ─────────────────────────────────────
+
+	/** Returns the context window size for the current model, or a sensible default. */
+	getContextWindowSize(): number {
+		const model = this.getSelectedModelInfo();
+		return model?.capabilities?.limits?.max_context_window_tokens ?? 128_000;
+	}
+
+	/**
+	 * Check context usage after a turn completes and update the banner.
+	 * Called from finalizeStreamingMessage.
+	 */
+	checkContextUsage(): void {
+		if (!this.turnUsage) return;
+		// The latest turn's inputTokens includes the full conversation history
+		this.sessionInputTokens = this.turnUsage.inputTokens + (this.turnUsage.cacheReadTokens ?? 0);
+		this.renderContextBanner();
+	}
+
+	/** Show or hide the context usage banner based on current token usage. */
+	renderContextBanner(): void {
+		if (!this.contextBannerEl) return;
+		this.contextBannerEl.empty();
+
+		if (this.contextBannerDismissed || this.sessionInputTokens === 0) {
+			this.contextBannerEl.addClass('is-hidden');
+			return;
+		}
+
+		const contextWindow = this.getContextWindowSize();
+		const ratio = this.sessionInputTokens / contextWindow;
+
+		if (ratio < 0.75) {
+			this.contextBannerEl.addClass('is-hidden');
+			return;
+		}
+
+		this.contextBannerEl.removeClass('is-hidden');
+		const isCritical = ratio >= 0.90;
+		this.contextBannerEl.toggleClass('is-warning', !isCritical);
+		this.contextBannerEl.toggleClass('is-critical', isCritical);
+
+		const iconEl = this.contextBannerEl.createSpan({cls: 'sidekick-context-banner-icon'});
+		setIcon(iconEl, isCritical ? 'alert-triangle' : 'info');
+
+		const pct = Math.round(ratio * 100);
+		const used = this.sessionInputTokens >= 1000
+			? `${(this.sessionInputTokens / 1000).toFixed(1)}k`
+			: `${this.sessionInputTokens}`;
+		const limit = contextWindow >= 1000
+			? `${(contextWindow / 1000).toFixed(0)}k`
+			: `${contextWindow}`;
+		const message = isCritical
+			? `Context window almost full (${pct}% \u2014 ${used}/${limit} tokens). Responses may be truncated or fail.`
+			: `Context window filling up (${pct}% \u2014 ${used}/${limit} tokens). Consider starting a new conversation.`;
+
+		this.contextBannerEl.createSpan({cls: 'sidekick-context-banner-text', text: message});
+
+		const actions = this.contextBannerEl.createDiv({cls: 'sidekick-context-banner-actions'});
+
+		const newBtn = actions.createEl('button', {cls: 'sidekick-context-banner-btn mod-cta', text: 'New conversation'});
+		newBtn.addEventListener('click', () => this.newConversation());
+
+		const clearBtn = actions.createEl('button', {cls: 'sidekick-context-banner-btn', text: 'Clear context'});
+		clearBtn.addEventListener('click', () => this.executeBuiltinCommand('clear'));
+
+		const dismissBtn = this.contextBannerEl.createSpan({cls: 'sidekick-context-banner-dismiss', attr: {title: 'Dismiss'}});
+		setIcon(dismissBtn, 'x');
+		dismissBtn.addEventListener('click', () => {
+			this.contextBannerDismissed = true;
+			this.renderContextBanner();
+		});
 	}
 
 	// ── Session config building ──────────────────────────────────

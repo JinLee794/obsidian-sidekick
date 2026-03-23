@@ -31,6 +31,8 @@ declare module '../sidekickView' {
 		completeToolCallBlock(toolCallId: string, success: boolean, result?: {content?: string; detailedContent?: string}, error?: {message: string}): void;
 		renderWelcome(): void;
 		updateSendButton(): void;
+		checkContextUsage(): void;
+		renderContextBanner(): void;
 	}
 }
 
@@ -375,6 +377,9 @@ export function installChatRenderer(ViewClass: {prototype: unknown}): void {
 
 		// Render handoff buttons if the active agent has handoffs
 		this.renderHandoffButtons();
+
+		// Check context usage before resetting turn data
+		this.checkContextUsage();
 
 		this.streamingContent = '';
 		this.streamingBodyEl = null;
