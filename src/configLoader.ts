@@ -1,5 +1,5 @@
 import {App, normalizePath, TFile, TFolder} from 'obsidian';
-import type {AgentConfig, HandoffConfig, SkillInfo, McpServerEntry, McpInputVariable, PromptConfig, TriggerConfig} from './types';
+import type {AgentConfig, HandoffConfig, SkillInfo, McpServerEntry, McpAuthConfig, McpInputVariable, PromptConfig, TriggerConfig} from './types';
 
 /** Module-level compiled regex for frontmatter detection. */
 const FM_RE = /^---\r?\n([\s\S]*?)\r?\n---\r?\n?([\s\S]*)$/;
@@ -374,7 +374,18 @@ export async function loadMcpServers(
 					const resolvedConfig = valueMap.size > 0
 						? resolveConfigInputs(config as Record<string, unknown>, valueMap)
 						: config as Record<string, unknown>;
-					entries.push({name, config: resolvedConfig});
+					// Parse optional auth refresh config
+					const rawAuth = (config as Record<string, unknown>)['auth'];
+					let auth: McpAuthConfig | undefined;
+					if (rawAuth && typeof rawAuth === 'object' && typeof (rawAuth as Record<string, unknown>)['command'] === 'string') {
+						const a = rawAuth as Record<string, unknown>;
+						auth = {
+							command: a['command'] as string,
+							...(Array.isArray(a['args']) ? {args: a['args'] as string[]} : {}),
+							...(typeof a['setInput'] === 'string' ? {setInput: a['setInput']} : {}),
+						};
+					}
+					entries.push({name, config: resolvedConfig, ...(auth ? {auth} : {})});
 				}
 			}
 		}

@@ -236,13 +236,8 @@ export function installConfigToolbar(ViewClass: { prototype: unknown }): void {
 					item.setTitle(server.name)
 						.setChecked(this.enabledMcpServers.has(server.name))
 						.onClick(() => {
-							if (this.enabledMcpServers.has(server.name)) {
-								this.enabledMcpServers.delete(server.name);
-							} else {
-								this.enabledMcpServers.add(server.name);
-							}
-							this.configDirty = true;
-							this.updateToolsBadge();
+							const shouldEnable = !this.enabledMcpServers.has(server.name);
+							void this.setMcpServerEnabled(server, shouldEnable);
 						});
 				});
 			}

@@ -815,4 +815,189 @@ export function installInputArea(ViewClass: {prototype: unknown}): void {
 		this.renderAttachments();
 		this.renderActiveNoteBar();
 	};
+
+	// ── File handling ────────────────────────────────────────────
+
+	proto.handleAttachFile = function(): void {
+		const input = document.createElement('input');
+		input.type = 'file';
+		input.multiple = true;
+		input.classList.add('sidekick-file-input-hidden');
+		document.body.appendChild(input);
+
+		input.addEventListener('change', () => {
+			if (!input.files) { input.remove(); return; }
+
+			// Resolve absolute OS path: prefer Electron webUtils, fallback to File.path
+			let getPath: (f: File) => string;
+			try {
+				const {webUtils} = globalThis.require('electron') as {webUtils?: {getPathForFile: (f: File) => string}};
+				if (webUtils?.getPathForFile) {
+					getPath = (f: File) => webUtils.getPathForFile(f);
+				} else {
+					getPath = (f: File) => (f as unknown as {path: string}).path || '';
+				}
+			} catch {
+				getPath = (f: File) => (f as unknown as {path: string}).path || '';
+			}
+
+			for (let i = 0; i < input.files.length; i++) {
+				const file = input.files[i];
+				if (!file) continue;
+				const filePath = getPath(file);
+				if (!filePath) {
+					continue;
+				}
+				this.attachments.push({type: 'file', name: file.name, path: filePath, absolutePath: true});
+			}
+			this.renderAttachments();
+			input.remove();
+		});
+
+		input.addEventListener('cancel', () => input.remove());
+		input.click();
+	};
+
+	proto.handleClipboard = async function(): Promise<void> {
+		try {
+			const text = await navigator.clipboard.readText();
+			if (!text.trim()) {
+				new Notice('Clipboard is empty.');
+				return;
+			}
+			const preview = text.length > 40 ? text.slice(0, 40) + '…' : text;
+			this.attachments.push({type: 'clipboard', name: `Clipboard: ${preview}`, content: text});
+			this.renderAttachments();
+		} catch (e) {
+			new Notice(`Failed to read clipboard: ${String(e)}`);
+		}
+	};
+
+	proto.handleImagePaste = async function(blob: File): Promise<void> {
+		try {
+			const buffer = await blob.arrayBuffer();
+			const ext = blob.type === 'image/png' ? 'png' : blob.type === 'image/jpeg' ? 'jpg' : 'png';
+			const name = `paste-${Date.now()}.${ext}`;
+			const folder = normalizePath(this.getImageAttachmentFolder());
+
+			await this.ensureFolderExists(folder);
+
+			const filePath = normalizePath(`${folder}/${name}`);
+			await this.app.vault.createBinary(filePath, buffer);
+
+			this.attachments.push({type: 'image', name, path: filePath});
+			this.renderAttachments();
+			new Notice('Image attached.');
+		} catch (e) {
+			new Notice(`Failed to attach image: ${String(e)}`);
+		}
+	};
+
+	proto.handleFileDrop = function(e: DragEvent): void {
+		const dt = e.dataTransfer;
+		if (!dt) return;
+
+		// ── Obsidian vault drag (file explorer) ──────────────────
+		const dragManager = (this.app as unknown as {dragManager?: {draggable?: {type: string; file?: unknown; files?: unknown[]}}}).dragManager;
+		const draggable = dragManager?.draggable as {type: string; file?: TFile | TFolder; files?: (TFile | TFolder)[]} | undefined;
+
+		if (draggable) {
+			const items: (TFile | TFolder)[] = [];
+			if ((draggable.type === 'file' || draggable.type === 'folder') && draggable.file) {
+				items.push(draggable.file);
+			} else if (draggable.type === 'files' && draggable.files) {
+				items.push(...draggable.files);
+			}
+
+			if (items.length > 0) {
+				for (const item of items) {
+					if (item instanceof TFolder) {
+						this.setScope([item.path]);
+						this.setWorkingDir(item.path);
+						new Notice(`Scope and working directory set to "${item.path}".`);
+					} else if (item instanceof TFile) {
+						this.attachments.push({type: 'file', name: item.name, path: item.path});
+						this.renderAttachments();
+						new Notice(`"${item.name}" attached.`);
+					}
+				}
+				return;
+			}
+		}
+
+		// ── Plain text drag ──────────────────────────────────────
+		if (dt.files.length === 0) {
+			const text = dt.getData('text/plain');
+			if (text) {
+				this.inputEl.value = text;
+				this.inputEl.setCssProps({'--input-height': 'auto'});
+				this.inputEl.setCssProps({'--input-height': Math.min(this.inputEl.scrollHeight, 200) + 'px'});
+				this.inputEl.focus();
+				return;
+			}
+		}
+
+		// ── External OS file drag ────────────────────────────────
+		const IMAGE_EXTS = new Set(['png', 'jpg', 'jpeg', 'gif', 'webp', 'bmp', 'svg']);
+
+		let getPath: (f: File) => string;
+		try {
+			const {webUtils} = globalThis.require('electron') as {webUtils?: {getPathForFile: (f: File) => string}};
+			if (webUtils?.getPathForFile) {
+				getPath = (f: File) => webUtils.getPathForFile(f);
+			} else {
+				getPath = (f: File) => (f as unknown as {path: string}).path || '';
+			}
+		} catch {
+			getPath = (f: File) => (f as unknown as {path: string}).path || '';
+		}
+
+		let attached = 0;
+		for (let i = 0; i < dt.files.length; i++) {
+			const file = dt.files[i];
+			if (!file) continue;
+			const filePath = getPath(file);
+			if (!filePath) continue;
+
+			const ext = file.name.split('.').pop()?.toLowerCase() ?? '';
+			if (IMAGE_EXTS.has(ext)) {
+				void this.handleImagePaste(file);
+			} else {
+				this.attachments.push({type: 'file', name: file.name, path: filePath, absolutePath: true});
+			}
+			attached++;
+		}
+
+		if (attached > 0) {
+			this.renderAttachments();
+			new Notice(`${attached} file${attached > 1 ? 's' : ''} attached.`);
+		}
+	};
+
+	proto.ensureFolderExists = async function(folderPath: string): Promise<void> {
+		if (this.app.vault.getAbstractFileByPath(folderPath)) return;
+		const parts = folderPath.split('/');
+		let current = '';
+		for (const part of parts) {
+			current = current ? `${current}/${part}` : part;
+			if (!this.app.vault.getAbstractFileByPath(current)) {
+				await this.app.vault.createFolder(current);
+			}
+		}
+	};
+
+	proto.getImageAttachmentFolder = function(): string {
+		const configured = (this.app.vault as unknown as {getConfig: (key: string) => unknown}).getConfig('attachmentFolderPath') as string | undefined;
+		if (configured && configured !== '/' && configured !== './' && configured !== '.') {
+			return `${configured}/sidekick`;
+		}
+		return '.sidekick-attachments';
+	};
+
+	proto.openScopeModal = function(): void {
+		new VaultScopeModal(this.app, this.scopePaths, (paths) => {
+			this.scopePaths = paths;
+			this.renderScopeBar();
+		}).open();
+	};
 }

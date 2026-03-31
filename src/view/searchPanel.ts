@@ -1,11 +1,11 @@
 import {Menu, Notice, TFile, normalizePath, setIcon} from 'obsidian';
 import type {SidekickView} from '../sidekickView';
-import type {SessionConfig, SessionMetadata, ProviderConfig, PermissionRequest, CustomAgentConfig} from '../copilot';
+import type {SessionConfig, SessionMetadata, PermissionRequest} from '../copilot';
 import {approveAll} from '../copilot';
 import type {AgentConfig} from '../types';
 import {getSkillsFolder} from '../settings';
 import {FolderTreeModal, ToolApprovalModal} from '../modals';
-import {mapMcpServers} from './sessionConfig';
+import {mapMcpServers, buildProviderConfig} from './sessionConfig';
 
 declare module '../sidekickView' {
 	interface SidekickView {
@@ -319,18 +319,14 @@ export function installSearchPanel(ViewClass: { prototype: unknown }): void {
 			.filter(s => !this.searchEnabledSkills.has(s.name))
 			.map(s => s.name);
 
-		// Custom agents — only the selected search agent, or all if none selected
-		const agentPool = this.searchAgent
-			? this.agents.filter(a => a.name === this.searchAgent)
-			: this.agents;
-		const customAgents: CustomAgentConfig[] = agentPool.map(a => ({
-			name: a.name,
-			displayName: a.name,
-			description: a.description || undefined,
-			prompt: a.instructions,
-			tools: a.tools ?? null,
-			infer: true,
-		}));
+		// Agent instructions injected via systemMessage
+		const searchAgent = this.searchAgent
+			? this.agents.find(a => a.name === this.searchAgent)
+			: undefined;
+		const systemParts: string[] = [];
+		if (this.globalInstructions) systemParts.push(this.globalInstructions);
+		if (searchAgent?.instructions) systemParts.push(searchAgent.instructions);
+		const searchSystemContent = systemParts.length > 0 ? systemParts.join('\n\n') : undefined;
 
 		// Permission handler
 		const permissionHandler = (request: PermissionRequest) => {
@@ -343,21 +339,11 @@ export function installSearchPanel(ViewClass: { prototype: unknown }): void {
 		};
 
 		// BYOK provider
+		const provider = buildProviderConfig(this.plugin.settings);
 		const providerPreset = this.plugin.settings.providerPreset;
-		let provider: ProviderConfig | undefined;
-		if (providerPreset !== 'github' && this.plugin.settings.providerBaseUrl) {
-			const typeMap: Record<string, 'openai' | 'azure' | 'anthropic'> = {
-				openai: 'openai', azure: 'azure', anthropic: 'anthropic',
-				ollama: 'openai', 'foundry-local': 'openai', 'other-openai': 'openai',
-			};
-			provider = {
-				type: typeMap[providerPreset] ?? 'openai',
-				baseUrl: this.plugin.settings.providerBaseUrl,
-				...(this.plugin.settings.providerApiKey ? {apiKey: this.plugin.settings.providerApiKey} : {}),
-				...(this.plugin.settings.providerBearerToken ? {bearerToken: this.plugin.settings.providerBearerToken} : {}),
-				wireApi: this.plugin.settings.providerWireApi,
-			};
-		}
+
+		// Exclude shell tools by default for search sessions
+		const excludedTools: string[] = ['bash', 'write_bash', 'list_bash'];
 
 		return {
 			model: (provider && this.plugin.settings.providerModel) ? this.plugin.settings.providerModel : (this.searchModel || undefined),
@@ -366,9 +352,10 @@ export function installSearchPanel(ViewClass: { prototype: unknown }): void {
 			workingDirectory: this.getSearchWorkingDirectory(),
 			...(provider ? {provider} : {}),
 			...(Object.keys(mcpServers).length > 0 ? {mcpServers} : {}),
-			...(customAgents.length > 0 ? {customAgents} : {}),
 			...(skillDirs.length > 0 ? {skillDirectories: skillDirs} : {}),
 			...(disabledSkills.length > 0 ? {disabledSkills} : {}),
+			...(excludedTools.length > 0 ? {excludedTools} : {}),
+			...(searchSystemContent ? {systemMessage: {mode: 'append' as const, content: searchSystemContent}} : {}),
 		};
 	};
 
@@ -504,21 +491,8 @@ export function installSearchPanel(ViewClass: { prototype: unknown }): void {
 		}
 
 		// BYOK provider
+		const provider = buildProviderConfig(this.plugin.settings);
 		const providerPreset = this.plugin.settings.providerPreset;
-		let provider: ProviderConfig | undefined;
-		if (providerPreset !== 'github' && this.plugin.settings.providerBaseUrl) {
-			const typeMap: Record<string, 'openai' | 'azure' | 'anthropic'> = {
-				openai: 'openai', azure: 'azure', anthropic: 'anthropic',
-				ollama: 'openai', 'foundry-local': 'openai', 'other-openai': 'openai',
-			};
-			provider = {
-				type: typeMap[providerPreset] ?? 'openai',
-				baseUrl: this.plugin.settings.providerBaseUrl,
-				...(this.plugin.settings.providerApiKey ? {apiKey: this.plugin.settings.providerApiKey} : {}),
-				...(this.plugin.settings.providerBearerToken ? {bearerToken: this.plugin.settings.providerBearerToken} : {}),
-				wireApi: this.plugin.settings.providerWireApi,
-			};
-		}
 
 		return {
 			model: (provider && this.plugin.settings.providerModel) ? this.plugin.settings.providerModel : model,

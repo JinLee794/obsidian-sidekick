@@ -27,12 +27,11 @@ declare module '../sidekickView' {
 		finalizeStreamingMessage(): void;
 		renderMessageMetadata(): void;
 		renderHandoffButtons(): void;
-		addToolCallBlock(toolCallId: string, toolName: string, args?: unknown): void;
+		addToolCallBlock(toolCallId: string, toolName: string, args?: unknown, parentToolCallId?: string): void;
 		completeToolCallBlock(toolCallId: string, success: boolean, result?: {content?: string; detailedContent?: string}, error?: {message: string}): void;
 		renderWelcome(): void;
 		updateSendButton(): void;
 		checkContextUsage(): void;
-		renderContextBanner(): void;
 	}
 }
 
@@ -397,6 +396,7 @@ export function installChatRenderer(ViewClass: {prototype: unknown}): void {
 		this.turnToolsUsed = [];
 		this.turnSkillsUsed = [];
 		this.turnUsage = null;
+		this.lastUsageInputTokens = 0;
 
 		this.isStreaming = false;
 		this.updateSendButton();
@@ -534,10 +534,23 @@ export function installChatRenderer(ViewClass: {prototype: unknown}): void {
 		this.scrollToBottom();
 	};
 
-	proto.addToolCallBlock = function (toolCallId: string, toolName: string, args?: unknown): void {
-		if (!this.toolCallsContainer) return;
+	proto.addToolCallBlock = function (toolCallId: string, toolName: string, args?: unknown, parentToolCallId?: string): void {
+		// Determine where to render: inside a sub-agent block if this is a sub-agent tool call
+		let container = this.toolCallsContainer;
+		if (parentToolCallId) {
+			const subagentBlock = this.activeSubagentBlocks.get(parentToolCallId);
+			if (subagentBlock) {
+				// Find or create the activity container inside the sub-agent block
+				let activityEl = subagentBlock.querySelector('.sidekick-subagent-activity') as HTMLElement | null;
+				if (!activityEl) {
+					activityEl = subagentBlock.createDiv({cls: 'sidekick-subagent-activity'});
+				}
+				container = activityEl;
+			}
+		}
+		if (!container) return;
 
-		const details = this.toolCallsContainer.createEl('details', {cls: 'sidekick-tool-call'});
+		const details = container.createEl('details', {cls: `sidekick-tool-call${parentToolCallId ? ' sidekick-tool-call-nested' : ''}`});
 		const summary = details.createEl('summary', {cls: 'sidekick-tool-call-summary'});
 		const iconEl = summary.createSpan({cls: 'sidekick-tool-call-icon'});
 		setIcon(iconEl, 'wrench');

@@ -45,10 +45,32 @@ export interface SkillInfo {
 	folderPath: string;
 }
 
+/** Auth refresh configuration for an MCP server. */
+export interface McpAuthConfig {
+	/** Command to execute (e.g. "az"). */
+	command: string;
+	/** Arguments for the command. */
+	args?: string[];
+	/** If set, capture stdout and store as this MCP input variable ID. */
+	setInput?: string;
+}
+
 /** A single MCP server entry parsed from mcp.json. */
 export interface McpServerEntry {
 	name: string;
 	config: Record<string, unknown>;
+	/** Optional auth refresh configuration. */
+	auth?: McpAuthConfig;
+}
+
+/** A tool discovered from an MCP server via tools.list. */
+export interface McpToolInfo {
+	/** Tool identifier (e.g., "get_weather"). */
+	name: string;
+	/** Namespaced name for MCP tools (e.g., "serverName/toolName"). */
+	namespacedName?: string;
+	/** Description of what the tool does. */
+	description: string;
 }
 
 /** An input variable definition from the mcp.json "inputs" array. */

@@ -466,9 +466,22 @@
 }
 
 .sidekick-tools-item-name {
+	display: flex;
+	align-items: center;
+	gap: 4px;
 	font-size: var(--font-ui-small);
 	font-weight: var(--font-medium);
 	color: var(--text-normal);
+}
+
+.sidekick-tools-auth-btn {
+	padding: 0 2px;
+	color: var(--text-muted);
+	cursor: pointer;
+}
+
+.sidekick-tools-auth-btn:hover {
+	color: var(--text-accent);
 }
 
 .sidekick-tools-item-error {
@@ -476,6 +489,13 @@
 	color: var(--color-red);
 	margin-top: 2px;
 	word-break: break-word;
+}
+
+.sidekick-tools-item-proxy-note {
+	font-size: var(--font-ui-smaller);
+	color: var(--text-faint);
+	margin-top: 2px;
+	font-style: italic;
 }
 
 .sidekick-tools-item-meta {
@@ -526,6 +546,79 @@
 .sidekick-tools-toggle {
 	flex-shrink: 0;
 	margin-left: 8px;
+}
+
+/* Discovered MCP tools — collapsible */
+
+.sidekick-tools-discovered-details {
+	margin-top: 4px;
+}
+
+.sidekick-tools-discovered-summary {
+	cursor: pointer;
+	user-select: none;
+	list-style: none;
+	display: flex;
+	align-items: center;
+	gap: 4px;
+}
+
+.sidekick-tools-discovered-summary::-webkit-details-marker {
+	display: none;
+}
+
+.sidekick-tools-discovered-summary::before {
+	content: '▶';
+	font-size: 8px;
+	color: var(--text-faint);
+	transition: transform 0.15s;
+}
+
+.sidekick-tools-discovered-details[open] > .sidekick-tools-discovered-summary::before {
+	transform: rotate(90deg);
+}
+
+.sidekick-tools-discovered {
+	display: flex;
+	flex-direction: column;
+	gap: 2px;
+	margin-top: 4px;
+	padding-left: 2px;
+}
+
+.sidekick-tools-discovered-item {
+	display: flex;
+	align-items: center;
+	gap: 6px;
+	font-size: var(--font-ui-smaller);
+	line-height: 1.4;
+}
+
+.sidekick-tools-discovered-dot {
+	width: 6px;
+	height: 6px;
+	border-radius: 50%;
+	flex-shrink: 0;
+	background: var(--text-faint);
+}
+
+.sidekick-tools-discovered-dot.is-connected {
+	background: var(--color-green);
+}
+
+.sidekick-tools-discovered-name {
+	font-weight: var(--font-medium);
+	color: var(--text-normal);
+	white-space: nowrap;
+	flex-shrink: 0;
+}
+
+.sidekick-tools-discovered-desc {
+	color: var(--text-faint);
+	overflow: hidden;
+	text-overflow: ellipsis;
+	white-space: nowrap;
+	min-width: 0;
 }
 
 /* Agent tool mapping */
@@ -583,11 +676,41 @@
 	display: block;
 }
 
+.sidekick-tools-agent-details {
+	margin-top: 2px;
+	padding-left: 20px;
+}
+
+.sidekick-tools-agent-summary {
+	cursor: pointer;
+	user-select: none;
+	list-style: none;
+	font-size: var(--font-ui-smaller);
+	color: var(--text-muted);
+}
+
+.sidekick-tools-agent-summary::-webkit-details-marker {
+	display: none;
+}
+
+.sidekick-tools-agent-summary::before {
+	content: '▶';
+	font-size: 8px;
+	color: var(--text-faint);
+	margin-right: 4px;
+	transition: transform 0.15s;
+}
+
+.sidekick-tools-agent-details[open] > .sidekick-tools-agent-summary::before {
+	transform: rotate(90deg);
+}
+
 .sidekick-tools-agent-tools {
 	display: flex;
 	flex-wrap: wrap;
 	gap: 4px;
-	padding-left: 20px;
+	padding-left: 0;
+	padding-top: 4px;
 	overflow: hidden;
 }
 
@@ -1228,6 +1351,43 @@
 	margin-top: 4px;
 }
 
+/* Sub-agent activity section */
+.sidekick-subagent-activity-wrapper {
+	margin-top: 4px;
+	border-top: 1px solid var(--background-modifier-border);
+}
+
+.sidekick-subagent-activity-summary {
+	display: flex;
+	align-items: center;
+	gap: 6px;
+	padding: 4px 0;
+	font-size: var(--font-ui-smaller);
+	color: var(--text-muted);
+	cursor: pointer;
+	user-select: none;
+}
+
+.sidekick-subagent-activity-count {
+	background: var(--background-modifier-border);
+	color: var(--text-muted);
+	border-radius: var(--radius-s);
+	padding: 0 5px;
+	font-size: var(--font-ui-smaller);
+	min-width: 16px;
+	text-align: center;
+}
+
+.sidekick-subagent-activity {
+	padding: 2px 0 2px 8px;
+	border-left: 2px solid var(--background-modifier-border);
+}
+
+.sidekick-subagent-activity .sidekick-tool-call-nested {
+	margin: 2px 0;
+	font-size: var(--font-ui-smaller);
+}
+
 /* ── Tool approval modal ──────────────────────────────────────── */
 
 .sidekick-approval-modal h3 {
@@ -1506,89 +1666,6 @@
 @keyframes sidekick-indicator-pulse {
 	0%, 100% { opacity: 0.5; transform: scale(1); }
 	50%      { opacity: 1;   transform: scale(1.15); }
-}
-
-/* ── Context usage banner ─────────────────────────────────────── */
-
-.sidekick-context-banner {
-	flex-shrink: 0;
-	display: flex;
-	align-items: center;
-	gap: 8px;
-	padding: 8px 12px;
-	font-size: var(--font-ui-small);
-	line-height: 1.4;
-	border-top: 1px solid var(--background-modifier-border);
-	position: relative;
-}
-
-.sidekick-context-banner.is-hidden {
-	display: none;
-}
-
-.sidekick-context-banner.is-warning {
-	background: color-mix(in srgb, var(--color-yellow) 12%, var(--background-primary));
-	border-top-color: color-mix(in srgb, var(--color-yellow) 30%, var(--background-modifier-border));
-}
-
-.sidekick-context-banner.is-critical {
-	background: color-mix(in srgb, var(--color-red) 12%, var(--background-primary));
-	border-top-color: color-mix(in srgb, var(--color-red) 30%, var(--background-modifier-border));
-}
-
-.sidekick-context-banner-icon {
-	flex-shrink: 0;
-	display: flex;
-	align-items: center;
-}
-
-.sidekick-context-banner.is-warning .sidekick-context-banner-icon {
-	color: var(--color-yellow);
-}
-
-.sidekick-context-banner.is-critical .sidekick-context-banner-icon {
-	color: var(--color-red);
-}
-
-.sidekick-context-banner-text {
-	flex: 1;
-	min-width: 0;
-	color: var(--text-normal);
-}
-
-.sidekick-context-banner-actions {
-	display: flex;
-	gap: 6px;
-	flex-shrink: 0;
-}
-
-.sidekick-context-banner-btn {
-	font-size: var(--font-ui-smaller);
-	padding: 3px 10px;
-	border-radius: var(--radius-s);
-	cursor: pointer;
-	white-space: nowrap;
-}
-
-.sidekick-context-banner-dismiss {
-	position: absolute;
-	top: 4px;
-	right: 4px;
-	cursor: pointer;
-	color: var(--text-muted);
-	opacity: 0.6;
-	transition: opacity 0.15s;
-	display: flex;
-	align-items: center;
-}
-
-.sidekick-context-banner-dismiss:hover {
-	opacity: 1;
-}
-
-.sidekick-context-banner-dismiss svg {
-	width: 14px;
-	height: 14px;
 }
 
 /* ── Bottom panel ─────────────────────────────────────────────── */
@@ -2892,6 +2969,21 @@ body.sidekick-no-select {
 	color: var(--text-muted);
 }
 
+.sidekick-trigger-prompt-wrapper {
+	position: relative;
+}
+
+.sidekick-trigger-prompt-wrapper .sidekick-prompt-dropdown {
+	position: absolute;
+	bottom: 100%;
+	left: 0;
+	right: 0;
+	z-index: var(--layer-popover);
+	margin-bottom: 4px;
+	max-height: 200px;
+	overflow-y: auto;
+}
+
 .sidekick-trigger-prompt-textarea {
 	width: 100%;
 	min-height: 80px;
@@ -3011,9 +3103,21 @@ body.sidekick-no-select {
 
 /* ── MCP editor modal ─────────────────────────────────────── */
 
-.sidekick-mcp-editor-modal {
-	width: 600px;
+/* Override Obsidian's .modal wrapper for MCP editor sizing */
+.modal.sidekick-mcp-editor-modal-wrapper {
+	width: 800px;
 	max-width: 90vw;
+}
+
+.modal.sidekick-mcp-editor-modal-wrapper .modal-content {
+	width: 100%;
+	max-width: 100%;
+}
+
+.sidekick-mcp-editor-modal {
+	width: 100%;
+	max-width: 100%;
+	box-sizing: border-box;
 }
 
 .sidekick-mcp-editor-path {
@@ -3024,8 +3128,9 @@ body.sidekick-no-select {
 
 .sidekick-mcp-editor-textarea {
 	width: 100%;
-	min-height: 300px;
+	min-height: 400px;
 	font-family: var(--font-monospace);
+	box-sizing: border-box;
 	font-size: var(--font-ui-small);
 	line-height: 1.5;
 	padding: 8px;
@@ -3058,9 +3163,90 @@ body.sidekick-no-select {
 	color: var(--color-yellow);
 }
 
+.sidekick-mcp-editor-servers {
+	margin: 8px 0;
+	display: flex;
+	flex-direction: column;
+	gap: 4px;
+}
+
+.sidekick-mcp-editor-server-row {
+	display: flex;
+	align-items: center;
+	gap: 8px;
+	padding: 4px 8px;
+	border-radius: var(--radius-s);
+	background: var(--background-secondary);
+	font-size: var(--font-ui-smaller);
+}
+
+.sidekick-mcp-editor-server-name {
+	font-weight: 600;
+	min-width: 100px;
+}
+
+.sidekick-mcp-editor-server-tag {
+	font-size: 10px;
+	padding: 1px 6px;
+	border-radius: 3px;
+	background: var(--background-modifier-border);
+	color: var(--text-muted);
+}
+
+.sidekick-mcp-editor-server-ok {
+	color: var(--color-green);
+}
+
+.sidekick-mcp-editor-server-issue {
+	font-size: 11px;
+}
+
+.sidekick-mcp-editor-server-issue.is-error {
+	color: var(--color-red);
+}
+
+.sidekick-mcp-editor-server-issue.is-warning {
+	color: var(--color-yellow);
+}
+
+.sidekick-mcp-editor-server-result {
+	font-size: 11px;
+	padding: 1px 6px;
+	border-radius: 3px;
+}
+
+.sidekick-mcp-editor-server-result.is-connected {
+	color: var(--color-green);
+	background: rgba(0, 200, 0, 0.1);
+}
+
+.sidekick-mcp-editor-server-result.is-skipped {
+	color: var(--color-yellow);
+	background: rgba(200, 200, 0, 0.1);
+}
+
+.sidekick-mcp-editor-server-result.is-error {
+	color: var(--color-red);
+	background: rgba(200, 0, 0, 0.1);
+}
+
+.sidekick-mcp-editor-test-btn {
+	margin-left: auto;
+	padding: 2px 4px !important;
+}
+
+.sidekick-mcp-editor-test-btn.is-testing {
+	opacity: 0.5;
+	pointer-events: none;
+}
+
+.sidekick-mcp-editor-spacer {
+	flex: 1;
+}
+
 .sidekick-mcp-editor-buttons {
 	display: flex;
-	justify-content: flex-end;
+	align-items: center;
 	gap: 8px;
 	margin-top: 4px;
 }

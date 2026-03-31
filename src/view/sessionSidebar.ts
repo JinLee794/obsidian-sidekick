@@ -469,7 +469,7 @@ export function installSessionSidebar(ViewClass: {prototype: unknown}): void {
 		this.turnSkillsUsed = bg.turnSkillsUsed;
 		this.turnUsage = bg.turnUsage;
 		this.sessionInputTokens = bg.sessionInputTokens;
-		this.contextBannerDismissed = false;
+		this.contextHintShown = false;
 		this.configDirty = false;
 
 		this.chatContainer.empty();
@@ -515,9 +515,6 @@ export function installSessionSidebar(ViewClass: {prototype: unknown}): void {
 
 		// Restore agent from session name
 		this.restoreAgentFromSessionName(bg.sessionId);
-
-		// Update context usage banner for the restored session
-		this.renderContextBanner();
 
 		// Force scroll to end
 		this.forceScrollToBottom();
@@ -641,7 +638,7 @@ export function installSessionSidebar(ViewClass: {prototype: unknown}): void {
 		}
 		this.isStreaming = false;
 		this.sessionInputTokens = 0;
-		this.contextBannerDismissed = false;
+		this.contextHintShown = false;
 		this.chatContainer.empty();
 
 		// ── Check if the target session is already alive in background ──
@@ -706,9 +703,6 @@ export function installSessionSidebar(ViewClass: {prototype: unknown}): void {
 
 			// Restore the agent that was used in this session
 			this.restoreAgentFromSessionName(sessionId);
-
-			// Update context usage banner (no token data yet for cold-loaded sessions)
-			this.renderContextBanner();
 
 			// Force scroll to the end of the loaded conversation
 			this.forceScrollToBottom();

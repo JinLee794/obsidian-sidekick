@@ -1,5 +1,5 @@
 import {App, Modal, Notice, Setting, normalizePath, setIcon} from 'obsidian';
-import type {AgentConfig} from './types';
+import type {AgentConfig, PromptConfig} from './types';
 import type {ModelInfo} from './copilot';
 
 /** Cron schedule preset for quick selection. */
@@ -22,53 +22,6 @@ const CRON_PRESETS: CronPreset[] = [
 	{label: 'First of the month', cron: '0 9 1 * *', description: '1st of each month at 09:00'},
 	{label: 'Custom', cron: '', description: 'Enter a custom 5-field cron expression'},
 ];
-
-/** Prompt quality issue detected during validation. */
-interface PromptIssue {
-	severity: 'warning' | 'error';
-	message: string;
-}
-
-/** Validate trigger prompt for quality and specificity. */
-function validatePrompt(prompt: string): PromptIssue[] {
-	const issues: PromptIssue[] = [];
-	const trimmed = prompt.trim();
-	const wordCount = trimmed.split(/\s+/).filter(Boolean).length;
-
-	if (!trimmed) {
-		issues.push({severity: 'error', message: 'Prompt cannot be empty.'});
-		return issues;
-	}
-
-	if (wordCount < 5) {
-		issues.push({severity: 'error', message: 'Prompt is too short. Provide at least a sentence describing what the trigger should do.'});
-	}
-
-	// Vague / overly broad patterns
-	const vaguePatterns = [
-		{re: /^(do something|help me|do stuff|make it better|fix things)/i, msg: 'Prompt is too vague. Describe a specific outcome (e.g., "Summarize today\'s meeting notes into action items").'},
-		{re: /^(do everything|handle all|manage everything|process all|check everything)/i, msg: 'Prompt is too broad. Focus on one well-defined task per trigger.'},
-		{re: /^(hi|hello|hey|yo)\b/i, msg: 'A trigger prompt should be an instruction, not a greeting.'},
-	];
-	for (const {re, msg} of vaguePatterns) {
-		if (re.test(trimmed)) {
-			issues.push({severity: 'error', message: msg});
-		}
-	}
-
-	// Warn on broad scope without specifics
-	if (wordCount < 10 && /\b(all|every|everything|anything)\b/i.test(trimmed) && !/\b(all\s+\w+\s+files|every\s+(morning|evening|week|day|hour|monday|tuesday|wednesday|thursday|friday|saturday|sunday))\b/i.test(trimmed)) {
-		issues.push({severity: 'warning', message: 'Consider narrowing the scope. Triggers work best with focused, specific tasks rather than sweeping instructions.'});
-	}
-
-	// No actionable verb
-	const hasVerb = /\b(summarize|create|list|review|update|check|generate|prepare|analyze|compile|organize|send|format|extract|track|remind|report|collect|draft|prioritize|schedule|plan|clean|archive|move|rename|tag|sort)\b/i.test(trimmed);
-	if (!hasVerb && wordCount >= 5) {
-		issues.push({severity: 'warning', message: 'Tip: Start with an action verb (e.g., "Summarize…", "List…", "Review…") so the trigger has a clear task.'});
-	}
-
-	return issues;
-}
 
 /** Validate a trigger name for file-system safety. */
 function validateTriggerName(name: string): string | null {
@@ -116,6 +69,7 @@ export interface NewTriggerResult {
 export class NewTriggerModal extends Modal {
 	private agents: AgentConfig[];
 	private models: ModelInfo[];
+	private prompts: PromptConfig[];
 	private triggersFolder: string;
 	private onCreated: () => void;
 
@@ -133,17 +87,23 @@ export class NewTriggerModal extends Modal {
 	private selectedIcon = 'zap';
 
 	// UI elements for dynamic updates
-	private promptIssuesEl!: HTMLElement;
 	private cronPreviewEl!: HTMLElement;
 	private cronCustomRow!: HTMLElement;
 	private nameErrorEl!: HTMLElement;
 	private cronErrorEl!: HTMLElement;
 	private createBtn!: HTMLButtonElement;
 
-	constructor(app: App, agents: AgentConfig[], models: ModelInfo[], triggersFolder: string, onCreated: () => void) {
+	// Slash-prompt autocomplete state
+	private promptDropdown: HTMLElement | null = null;
+	private promptDropdownIndex = 0;
+	private promptDropdownItems: PromptConfig[] = [];
+	private promptTextarea!: HTMLTextAreaElement;
+
+	constructor(app: App, agents: AgentConfig[], models: ModelInfo[], prompts: PromptConfig[], triggersFolder: string, onCreated: () => void) {
 		super(app);
 		this.agents = agents;
 		this.models = models;
+		this.prompts = prompts;
 		this.triggersFolder = triggersFolder;
 		this.onCreated = onCreated;
 	}
@@ -364,24 +324,21 @@ export class NewTriggerModal extends Modal {
 		const promptSetting = new Setting(contentEl)
 			.setName('Prompt')
 			.setDesc('The instruction sent to the agent when this trigger fires. Be specific and action-oriented.');
-		const promptArea = contentEl.createEl('textarea', {
+		const promptWrapper = contentEl.createDiv({cls: 'sidekick-trigger-prompt-wrapper'});
+		const promptArea = promptWrapper.createEl('textarea', {
 			cls: 'sidekick-trigger-prompt-textarea',
 			attr: {
-				placeholder: 'e.g., Review all notes modified today and create a summary of key decisions and action items in my Daily Notes folder.',
+				placeholder: 'e.g., Review all notes modified today and create a summary… Type / to use a prompt.',
 				rows: '5',
 			},
 		});
+		this.promptTextarea = promptArea;
 		promptArea.addEventListener('input', () => {
 			this.prompt = promptArea.value;
-			this.validatePromptLive();
+			this.handlePromptSlash();
 			this.validateForm();
 		});
-		// Also validate on blur for final feedback
-		promptArea.addEventListener('blur', () => {
-			this.validatePromptLive();
-		});
-
-		this.promptIssuesEl = contentEl.createDiv({cls: 'sidekick-trigger-prompt-issues'});
+		promptArea.addEventListener('keydown', (e) => this.handlePromptKeydown(e));
 
 		// ── Enabled toggle ───────────────────────────────────
 		new Setting(contentEl)
@@ -415,6 +372,7 @@ export class NewTriggerModal extends Modal {
 	}
 
 	onClose(): void {
+		this.closePromptDropdown();
 		this.contentEl.empty();
 	}
 
@@ -448,17 +406,113 @@ export class NewTriggerModal extends Modal {
 		}
 	}
 
-	private validatePromptLive(): void {
-		if (!this.promptIssuesEl) return;
-		this.promptIssuesEl.empty();
-		if (!this.prompt.trim()) return;
+	// ── Slash-prompt autocomplete ────────────────────────
 
-		const issues = validatePrompt(this.prompt);
-		for (const issue of issues) {
-			const el = this.promptIssuesEl.createDiv({cls: `sidekick-trigger-issue sidekick-trigger-issue-${issue.severity}`});
-			const icon = el.createSpan({cls: 'sidekick-trigger-issue-icon'});
-			setIcon(icon, issue.severity === 'error' ? 'alert-circle' : 'alert-triangle');
-			el.createSpan({text: issue.message});
+	private handlePromptSlash(): void {
+		const value = this.promptTextarea.value;
+		if (!value.startsWith('/') || value.includes(' ')) {
+			this.closePromptDropdown();
+			return;
+		}
+		const query = value.slice(1).toLowerCase();
+		const matches = this.prompts.filter(p => p.name.toLowerCase().includes(query));
+		if (matches.length === 0) {
+			this.closePromptDropdown();
+			return;
+		}
+		this.showPromptDropdown(matches);
+	}
+
+	private showPromptDropdown(items: PromptConfig[]): void {
+		this.closePromptDropdown();
+		this.promptDropdownItems = items;
+		this.promptDropdownIndex = 0;
+
+		const dropdown = document.createElement('div');
+		dropdown.addClass('sidekick-prompt-dropdown');
+
+		for (let i = 0; i < items.length; i++) {
+			const p = items[i]!;
+			const row = dropdown.createDiv({cls: 'sidekick-prompt-item'});
+			if (i === 0) row.addClass('is-selected');
+			row.setAttribute('title', p.content || '');
+			row.createSpan({cls: 'sidekick-prompt-item-name', text: `/${p.name}`});
+			const descText = p.description || (p.content && p.content.length > 60 ? p.content.slice(0, 60) + '…' : p.content || '');
+			row.createSpan({cls: 'sidekick-prompt-item-desc', text: descText});
+			if (p.agent) {
+				row.createSpan({cls: 'sidekick-prompt-item-agent', text: p.agent});
+			}
+			row.addEventListener('click', () => {
+				this.promptDropdownIndex = i;
+				this.selectPromptFromDropdown();
+			});
+			row.addEventListener('mouseenter', () => {
+				this.promptDropdownIndex = i;
+				this.updatePromptDropdownSelection();
+			});
+		}
+
+		const wrapper = this.promptTextarea.closest('.sidekick-trigger-prompt-wrapper');
+		if (wrapper) wrapper.appendChild(dropdown);
+		this.promptDropdown = dropdown;
+	}
+
+	private closePromptDropdown(): void {
+		if (this.promptDropdown) {
+			this.promptDropdown.remove();
+			this.promptDropdown = null;
+		}
+		this.promptDropdownItems = [];
+	}
+
+	private updatePromptDropdownSelection(): void {
+		if (!this.promptDropdown) return;
+		const rows = this.promptDropdown.querySelectorAll('.sidekick-prompt-item');
+		rows.forEach((el, i) => el.toggleClass('is-selected', i === this.promptDropdownIndex));
+	}
+
+	private selectPromptFromDropdown(): void {
+		const selected = this.promptDropdownItems[this.promptDropdownIndex];
+		if (!selected) { this.closePromptDropdown(); return; }
+
+		// Auto-select the prompt's agent if it has one
+		if (selected.agent) {
+			const agentDropdown = this.contentEl.querySelector('.setting-item:has(.setting-item-name:first-child) select') as HTMLSelectElement | null;
+			// Find agent dropdown by iterating settings
+			for (const dd of Array.from(this.contentEl.querySelectorAll('select'))) {
+				const opts = Array.from((dd as HTMLSelectElement).options);
+				if (opts.some(o => o.value === selected.agent)) {
+					(dd as HTMLSelectElement).value = selected.agent!;
+					(dd as HTMLSelectElement).dispatchEvent(new Event('change'));
+					break;
+				}
+			}
+		}
+
+		this.promptTextarea.value = `/${selected.name} `;
+		this.prompt = this.promptTextarea.value;
+		this.promptTextarea.focus();
+		this.closePromptDropdown();
+		this.validateForm();
+	}
+
+	private handlePromptKeydown(e: KeyboardEvent): void {
+		if (!this.promptDropdown) return;
+		if (e.key === 'ArrowDown') {
+			e.preventDefault();
+			this.promptDropdownIndex = (this.promptDropdownIndex + 1) % this.promptDropdownItems.length;
+			this.updatePromptDropdownSelection();
+		} else if (e.key === 'ArrowUp') {
+			e.preventDefault();
+			this.promptDropdownIndex = (this.promptDropdownIndex - 1 + this.promptDropdownItems.length) % this.promptDropdownItems.length;
+			this.updatePromptDropdownSelection();
+		} else if (e.key === 'Enter' || e.key === 'Tab') {
+			e.preventDefault();
+			e.stopPropagation();
+			this.selectPromptFromDropdown();
+		} else if (e.key === 'Escape') {
+			e.preventDefault();
+			this.closePromptDropdown();
 		}
 	}
 
@@ -493,9 +547,8 @@ export class NewTriggerModal extends Modal {
 			valid = false;
 		}
 
-		// Prompt — block on errors only
-		const promptIssues = validatePrompt(this.prompt);
-		if (promptIssues.some(i => i.severity === 'error')) valid = false;
+		// Prompt — require non-empty
+		if (!this.prompt.trim()) valid = false;
 
 		if (this.createBtn) this.createBtn.disabled = !valid;
 	}

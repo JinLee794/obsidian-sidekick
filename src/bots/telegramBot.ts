@@ -13,7 +13,7 @@ import type {AgentConfig, SkillInfo, McpServerEntry} from '../types';
 import {getSkillsFolder, getMcpInputValue} from '../settings';
 import {loadAgents, loadSkills, loadMcpServers, loadInstructions} from '../configLoader';
 import type {InputResolver} from '../configLoader';
-import {mapMcpServers} from '../view/sessionConfig';
+import {mapMcpServers, buildProviderConfig} from '../view/sessionConfig';
 import {resolveModelForAgent} from '../view/sessionConfig';
 import type {TelegramMessage} from './telegramApi';
 import {TelegramApi, TelegramApiError} from './telegramApi';
@@ -321,9 +321,8 @@ export class TelegramBotService {
 			disabledSkills = this.skills.filter(s => !allowed.has(s.name)).map(s => s.name);
 		}
 
-		// Custom agents
-		const agentPool = agent ? [agent] : this.agents;
-		const customAgents: CustomAgentConfig[] = agentPool.map(a => ({
+		// Custom agents — pass ALL agents so the SDK can delegate between them
+		const customAgents: CustomAgentConfig[] = this.agents.map(a => ({
 			name: a.name,
 			displayName: a.name,
 			description: a.description || undefined,
@@ -346,26 +345,15 @@ export class TelegramBotService {
 		};
 
 		// BYOK provider
+		const provider = buildProviderConfig(this.plugin.settings);
 		const providerPreset = this.plugin.settings.providerPreset;
-		let provider: import('../copilot').ProviderConfig | undefined;
-		if (providerPreset !== 'github' && this.plugin.settings.providerBaseUrl) {
-			const typeMap: Record<string, 'openai' | 'azure' | 'anthropic'> = {
-				openai: 'openai', azure: 'azure', anthropic: 'anthropic',
-				ollama: 'openai', 'foundry-local': 'openai', 'other-openai': 'openai',
-			};
-			provider = {
-				type: typeMap[providerPreset] ?? 'openai',
-				baseUrl: this.plugin.settings.providerBaseUrl,
-				...(this.plugin.settings.providerApiKey ? {apiKey: this.plugin.settings.providerApiKey} : {}),
-				...(this.plugin.settings.providerBearerToken ? {bearerToken: this.plugin.settings.providerBearerToken} : {}),
-				wireApi: this.plugin.settings.providerWireApi,
-			};
-		}
 
 		const reasoningEffort = this.plugin.settings.reasoningEffort;
 
-		// Build system message from global instructions
-		const systemContent = this.globalInstructions || undefined;
+		// System message for global instructions only (not agent-specific — those are in customAgents)
+		const systemParts: string[] = [];
+		if (this.globalInstructions) systemParts.push(this.globalInstructions);
+		const systemContent = systemParts.length > 0 ? systemParts.join('\n\n') : undefined;
 
 		return {
 			model: (provider && this.plugin.settings.providerModel) ? this.plugin.settings.providerModel : model,

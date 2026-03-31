@@ -113,6 +113,7 @@ export function installTriggersPanel(ViewClass: {prototype: unknown}): void {
 				this.app,
 				this.agents,
 				this.models,
+				this.prompts,
 				triggersFolder,
 				() => void this.loadAllConfigs({silent: true}),
 			).open();

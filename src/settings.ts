@@ -345,6 +345,38 @@ JSON file with \`servers\` (or \`mcpServers\`) and optional \`inputs\` for varia
 }
 \`\`\`
 
+### Auth refresh
+
+Add an \`auth\` block to a server to enable the refresh-auth button (key icon) in the Tools panel.
+
+| Field | Type | Description |
+|---|---|---|
+| \`command\` | string | Command to execute (e.g. \`az\`) |
+| \`args\` | string[] | Arguments for the command |
+| \`setInput\` | string | If set, capture stdout and save as this input variable ID |
+
+Example — refresh an Azure access token and store it in the \`workiq-token\` input:
+
+\`\`\`json
+{
+  "inputs": [
+    { "id": "workiq-token", "description": "WorkIQ access token", "password": true }
+  ],
+  "servers": {
+    "workiq": {
+      "type": "http",
+      "url": "https://workiq.example.com/mcp/",
+      "headers": { "Authorization": "Bearer \${input:workiq-token}" },
+      "auth": {
+        "command": "az",
+        "args": ["account", "get-access-token", "--resource", "api://workiq", "--query", "accessToken", "-o", "tsv"],
+        "setInput": "workiq-token"
+      }
+    }
+  }
+}
+\`\`\`
+
 ---
 
 ## Slash commands

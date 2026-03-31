@@ -239,6 +239,18 @@ export class CopilotService {
 		return await this.client!.listModels();
 	}
 
+	// ── Tools ───────────────────────────────────────────────────────
+
+	/**
+	 * List all tools known to the Copilot CLI, including MCP tools from active sessions.
+	 * MCP tools have a `namespacedName` like "serverName/toolName".
+	 */
+	async listTools(model?: string): Promise<Array<{name: string; namespacedName?: string; description: string}>> {
+		await this.ensureConnected();
+		const result = await this.client!.rpc.tools.list({model});
+		return result.tools;
+	}
+
 	// ── Sessions ────────────────────────────────────────────────────
 
 	/**
