@@ -5,6 +5,7 @@ import {approveAll} from '../copilot';
 import type {AgentConfig, McpServerEntry, ChatAttachment} from '../types';
 import type {SidekickView} from '../sidekickView';
 import {getSkillsFolder, getAgentsFolder as getAgentsFolderSetting} from '../settings';
+import {resolveEnvRef} from '../secureStorage';
 import {ToolApprovalModal} from '../modals/toolApprovalModal';
 import {UserInputModal} from '../modals/userInputModal';
 import type {UserInputRequest} from '../modals/userInputModal';
@@ -209,8 +210,8 @@ export function buildProviderConfig(settings: {
 	return {
 		type: typeMap[settings.providerPreset] ?? 'openai',
 		baseUrl: settings.providerBaseUrl,
-		...(settings.providerApiKey ? {apiKey: settings.providerApiKey} : {}),
-		...(settings.providerBearerToken ? {bearerToken: settings.providerBearerToken} : {}),
+		...(settings.providerApiKey ? {apiKey: resolveEnvRef(settings.providerApiKey)} : {}),
+		...(settings.providerBearerToken ? {bearerToken: resolveEnvRef(settings.providerBearerToken)} : {}),
 		wireApi: settings.providerWireApi,
 	};
 }

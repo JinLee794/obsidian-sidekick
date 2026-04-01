@@ -3,6 +3,7 @@ import SidekickPlugin from "./main";
 import type {ModelInfo, ProviderConfig} from "./copilot";
 import type {McpInputVariable} from "./types";
 import {loadMcpInputs, loadAgents} from "./configLoader";
+import {loadSecureField, saveSecureField, loadMcpSecret, saveMcpSecret, deleteMcpSecret, resolveEnvRef, isEnvRef} from "./secureStorage";
 
 const DEFAULT_COPILOT_LOCATION = '';
 
@@ -126,18 +127,8 @@ export const DEFAULT_SETTINGS: SidekickSettings = {
 /** Fields stored in vault-specific local storage instead of data.json. */
 export const SECURE_FIELDS: ReadonlyArray<keyof SidekickSettings> = ['githubToken', 'providerApiKey', 'providerBearerToken', 'telegramBotToken'];
 
-const SECURE_PREFIX = 'sidekick-secure-';
-
-/** Load a secure field from vault-specific local storage. */
-export function loadSecureField(app: App, key: string): string {
-	const stored = app.loadLocalStorage(SECURE_PREFIX + key);
-	return stored != null ? String(stored) : '';
-}
-
-/** Save a secure field to vault-specific local storage. */
-export function saveSecureField(app: App, key: string, value: string): void {
-	app.saveLocalStorage(SECURE_PREFIX + key, value || null);
-}
+// loadSecureField / saveSecureField are now re-exported from secureStorage.ts
+export {loadSecureField, saveSecureField, resolveEnvRef, isEnvRef};
 
 /** Derive the agents subfolder from the base Sidekick folder. */
 export function getAgentsFolder(settings: SidekickSettings): string {
@@ -522,11 +513,11 @@ export class SidekickSettingTab extends PluginSettingTab {
 
 				new Setting(clientFieldsEl)
 					.setName('GitHub token')
-					.setDesc('GitHub token for authentication (stored securely).')
+					.setDesc('Encrypted locally, never stored in the vault. Use $ENV_VAR to read from environment.')
 					.addText(text => {
 						text.inputEl.type = 'password';
 						text.inputEl.autocomplete = 'off';
-						text.setPlaceholder('')
+						text.setPlaceholder('token or $GITHUB_TOKEN')
 							.setValue(this.plugin.settings.githubToken)
 							.onChange(async (value) => {
 								updateSecureField(this.app, this.plugin, 'githubToken', value.trim());
@@ -566,11 +557,11 @@ export class SidekickSettingTab extends PluginSettingTab {
 				if (!this.plugin.settings.useLoggedInUser) {
 					new Setting(clientFieldsEl)
 						.setName('GitHub token')
-						.setDesc('GitHub token for authentication (stored securely).')
+						.setDesc('Encrypted locally, never stored in the vault. Use $ENV_VAR to read from environment.')
 						.addText(text => {
 							text.inputEl.type = 'password';
 							text.inputEl.autocomplete = 'off';
-							text.setPlaceholder('')
+							text.setPlaceholder('token or $GITHUB_TOKEN')
 								.setValue(this.plugin.settings.githubToken)
 								.onChange(async (value) => {
 									updateSecureField(this.app, this.plugin, 'githubToken', value.trim());
@@ -664,10 +655,10 @@ export class SidekickSettingTab extends PluginSettingTab {
 
 				new Setting(providerFieldsEl)
 					.setName('API key')
-					.setDesc('Sent as optional header (stored securely).')
+					.setDesc('Encrypted locally. Use $ENV_VAR for shared vaults.')
 					.addText(text => {
 						text.inputEl.type = 'password';
-						text.setPlaceholder('')
+						text.setPlaceholder('key or $OPENAI_API_KEY')
 							.setValue(this.plugin.settings.providerApiKey)
 							.onChange((value) => {
 								updateSecureField(this.app, this.plugin, 'providerApiKey', value.trim());
@@ -676,10 +667,10 @@ export class SidekickSettingTab extends PluginSettingTab {
 
 				new Setting(providerFieldsEl)
 					.setName('Bearer token')
-					.setDesc('Authorization optional token header (stored securely).')
+					.setDesc('Encrypted locally. Use $ENV_VAR for shared vaults.')
 					.addText(text => {
 						text.inputEl.type = 'password';
-						text.setPlaceholder('')
+						text.setPlaceholder('token or $BEARER_TOKEN')
 							.setValue(this.plugin.settings.providerBearerToken)
 							.onChange((value) => {
 								updateSecureField(this.app, this.plugin, 'providerBearerToken', value.trim());
@@ -751,8 +742,8 @@ export class SidekickSettingTab extends PluginSettingTab {
 										type: typeMap[this.plugin.settings.providerPreset] ?? 'openai',
 										baseUrl: this.plugin.settings.providerBaseUrl,
 										wireApi: this.plugin.settings.providerWireApi,
-										...(this.plugin.settings.providerApiKey ? {apiKey: this.plugin.settings.providerApiKey} : {}),
-										...(this.plugin.settings.providerBearerToken ? {bearerToken: this.plugin.settings.providerBearerToken} : {}),
+										...(this.plugin.settings.providerApiKey ? {apiKey: resolveEnvRef(this.plugin.settings.providerApiKey)} : {}),
+										...(this.plugin.settings.providerBearerToken ? {bearerToken: resolveEnvRef(this.plugin.settings.providerBearerToken)} : {}),
 									};
 									return cfg;
 								})()}
@@ -1027,7 +1018,7 @@ export class SidekickSettingTab extends PluginSettingTab {
 					.setButtonText('Connect')
 					.setCta()
 					.onClick(async () => {
-						const token = this.plugin.settings.telegramBotToken;
+						const token = resolveEnvRef(this.plugin.settings.telegramBotToken);
 						if (!token) {
 							new Notice('Please enter a bot token first.');
 							return;
@@ -1061,11 +1052,11 @@ export class SidekickSettingTab extends PluginSettingTab {
 
 		new Setting(panel)
 			.setName('Bot token')
-			.setDesc('The bot token (stored securely).')
+			.setDesc('Encrypted locally. Use $ENV_VAR for shared vaults.')
 			.addText(text => {
 				text.inputEl.type = 'password';
 				text.inputEl.autocomplete = 'off';
-				text.setPlaceholder('')
+				text.setPlaceholder('token or $TELEGRAM_BOT_TOKEN')
 					.setValue(this.plugin.settings.telegramBotToken)
 					.onChange((value) => {
 						updateSecureField(this.app, this.plugin, 'telegramBotToken', value.trim());
@@ -1112,13 +1103,22 @@ export class SidekickSettingTab extends PluginSettingTab {
 
 // ── MCP Input value helpers ─────────────────────────────────
 
-const MCP_SECRET_PREFIX = 'sidekick-mcp-input-';
-
-/** Retrieve the stored value for an MCP input variable. */
+/** Retrieve the stored value for an MCP input variable. Env-var refs are resolved. */
 export function getMcpInputValue(app: App, plugin: SidekickPlugin, id: string, isPassword: boolean): string | undefined {
 	if (isPassword) {
-		const stored = app.loadLocalStorage(MCP_SECRET_PREFIX + id);
-		return stored != null ? String(stored) : undefined;
+		const stored = loadMcpSecret(app, id);
+		if (!stored) return undefined;
+		return resolveEnvRef(stored);
+	}
+	const val = plugin.settings.mcpInputValues?.[id];
+	return val != null ? resolveEnvRef(val) : undefined;
+}
+
+/** Return the raw (unresolved) stored reference — useful for UI display. */
+export function getMcpInputRaw(app: App, plugin: SidekickPlugin, id: string, isPassword: boolean): string | undefined {
+	if (isPassword) {
+		const stored = loadMcpSecret(app, id);
+		return stored || undefined;
 	}
 	return plugin.settings.mcpInputValues?.[id];
 }
@@ -1126,7 +1126,7 @@ export function getMcpInputValue(app: App, plugin: SidekickPlugin, id: string, i
 /** Store a value for an MCP input variable. */
 export async function setMcpInputValue(app: App, plugin: SidekickPlugin, id: string, value: string, isPassword: boolean): Promise<void> {
 	if (isPassword) {
-		app.saveLocalStorage(MCP_SECRET_PREFIX + id, value);
+		saveMcpSecret(app, id, value);
 	} else {
 		if (!plugin.settings.mcpInputValues) plugin.settings.mcpInputValues = {};
 		plugin.settings.mcpInputValues[id] = value;
@@ -1137,7 +1137,7 @@ export async function setMcpInputValue(app: App, plugin: SidekickPlugin, id: str
 /** Delete the stored value for an MCP input variable. */
 export async function deleteMcpInputValue(app: App, plugin: SidekickPlugin, id: string, isPassword: boolean): Promise<void> {
 	if (isPassword) {
-		app.saveLocalStorage(MCP_SECRET_PREFIX + id, null);
+		deleteMcpSecret(app, id);
 	} else {
 		if (plugin.settings.mcpInputValues) {
 			delete plugin.settings.mcpInputValues[id];

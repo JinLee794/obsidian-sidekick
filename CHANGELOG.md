@@ -5,6 +5,20 @@ All notable changes to the Sidekick plugin are documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/),
 and this project adheres to [Semantic Versioning](https://semver.org/).
 
+## [1.2.2-jinle] - 2026-04-01
+
+### Added
+
+- **Encrypted secure storage** (`secureStorage.ts`): AES-256-GCM encryption at rest for all secrets stored in Obsidian's localStorage. Key derived via PBKDF2 from machine hostname, OS username, and vault path — copying app-data to another machine is useless. Legacy unencrypted values are transparently re-encrypted on next save.
+- **Environment variable references** for secret fields: enter `$GITHUB_TOKEN` or `${OPENAI_API_KEY}` instead of a literal token — resolved from `process.env` at runtime, never persisted to disk. Recommended for shared or synced vaults (OneDrive, iCloud, etc.).
+- **Updated settings UI**: all token/key fields now show `$ENV_VAR` placeholder hints and "Encrypted locally" descriptions.
+
+### Changed
+
+- MCP password-flagged input variables now use the same encrypted storage layer instead of raw localStorage.
+- Provider API key and bearer token resolved through `resolveEnvRef()` at every consumption point (`sessionConfig.ts`, `settings.ts` model test, `main.ts` Copilot init).
+- Telegram bot token resolved through `resolveEnvRef()` before connect.
+
 ## [Unreleased - Jin Lee]
 
 ### Added

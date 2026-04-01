@@ -656,6 +656,7 @@ export class SidekickView extends ItemView {
 	async loadAllConfigs(options?: {silent?: boolean}): Promise<void> {
 		if (this.configLoading) return;
 		this.configLoading = true;
+		let isReload = false;
 		try {
 			// Build input resolver that reads stored values or prompts for missing ones
 			const inputResolver: InputResolver = async (input: McpInputVariable) => {
@@ -685,10 +686,12 @@ export class SidekickView extends ItemView {
 				loadTriggers(this.app, getTriggersFolder(this.plugin.settings)),
 				loadInstructions(this.app, this.plugin.settings.sidekickFolder),
 			]);
+			const previousServerNames = new Set(this.mcpServers.map(s => s.name));
+			const previousSkillNames = new Set(this.skills.map(s => s.name));
+
 			this.agents = agents;
 			this.skills = skills;
 			this.mcpServers = mcpServers;
-			this.mcpServerStatus.clear();
 			this.prompts = prompts;
 			this.triggers = triggers;
 			this.globalInstructions = globalInstructions;
@@ -698,9 +701,35 @@ export class SidekickView extends ItemView {
 			this.renderTriggerTestBar();
 			this.renderAgentEditBar();
 
-			// Enable all skills and tools by default (agent filter applied in updateConfigUI)
-			this.enabledSkills = new Set(this.skills.map(s => s.name));
-			this.enabledMcpServers = new Set(this.mcpServers.map(s => s.name));
+			// Preserve user toggle state across config reloads.
+			// First load: enable everything. Subsequent loads: keep existing
+			// enabled/disabled state, only adding newly-discovered entries.
+			const isReloadCheck = previousServerNames.size > 0;
+			isReload = isReloadCheck;
+			if (isReloadCheck) {
+				const newServerNames = new Set(this.mcpServers.map(s => s.name));
+				for (const name of [...this.enabledMcpServers]) {
+					if (!newServerNames.has(name)) this.enabledMcpServers.delete(name);
+				}
+				for (const name of newServerNames) {
+					if (!previousServerNames.has(name)) this.enabledMcpServers.add(name);
+				}
+				const newSkillNames = new Set(this.skills.map(s => s.name));
+				for (const name of [...this.enabledSkills]) {
+					if (!newSkillNames.has(name)) this.enabledSkills.delete(name);
+				}
+				for (const name of newSkillNames) {
+					if (!previousSkillNames.has(name)) this.enabledSkills.add(name);
+				}
+				// Preserve connection status for servers that still exist
+				for (const name of [...this.mcpServerStatus.keys()]) {
+					if (!newServerNames.has(name)) this.mcpServerStatus.delete(name);
+				}
+			} else {
+				this.enabledSkills = new Set(this.skills.map(s => s.name));
+				this.enabledMcpServers = new Set(this.mcpServers.map(s => s.name));
+				this.mcpServerStatus.clear();
+			}
 
 			// Populate model list: BYOK direct providers don't need a copilot connection
 			if (!options?.silent) {
@@ -726,7 +755,7 @@ export class SidekickView extends ItemView {
 			this.configLoadedAt = Date.now();
 		}
 
-		this.updateConfigUI();
+		this.updateConfigUI({preserveToggles: isReload});
 		this.configDirty = true;
 		if (!options?.silent) {
 			new Notice(`Loaded ${this.agents.length} agent(s), ${this.models.length} model(s), ${this.skills.length} skill(s), ${this.mcpServers.length} tool server(s), ${this.prompts.length} prompt(s), ${this.triggers.length} trigger(s).`);
@@ -765,7 +794,7 @@ export class SidekickView extends ItemView {
 		);
 	}
 
-	updateConfigUI(): void {
+	updateConfigUI(options?: {preserveToggles?: boolean}): void {
 		// Agents
 		this.agentSelect.empty();
 		const noAgent = this.agentSelect.createEl('option', {text: 'Auto', attr: {value: ''}});
@@ -801,9 +830,11 @@ export class SidekickView extends ItemView {
 			this.modelSelect.value = this.selectedModel;
 		}
 
-		// Apply agent's tools and skills filter
-		const selectedAgentForFilter = this.agents.find(a => a.name === this.selectedAgent);
-		this.applyAgentToolsAndSkills(selectedAgentForFilter);
+		// Apply agent's tools and skills filter (skip on reload to preserve user toggles)
+		if (!options?.preserveToggles) {
+			const selectedAgentForFilter = this.agents.find(a => a.name === this.selectedAgent);
+			this.applyAgentToolsAndSkills(selectedAgentForFilter);
+		}
 		this.updateReasoningBadge();
 
 		// Update search panel dropdowns

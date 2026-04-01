@@ -1,6 +1,7 @@
-import {Plugin, FileSystemAdapter} from 'obsidian';
+import {Plugin, FileSystemAdapter, Notice} from 'obsidian';
 import {DEFAULT_SETTINGS, SidekickSettings, SidekickSettingTab, SECURE_FIELDS, loadSecureField, saveSecureField} from "./settings";
 import {CopilotService, resolveGhToken} from "./copilot";
+import {resolveEnvRef, purgeAllSecrets} from "./secureStorage";
 import {SidekickView, SIDEKICK_VIEW_TYPE} from "./sidekickView";
 import {registerEditorMenu, registerFileMenu} from './editor/editorMenu';
 import {buildGhostTextExtension} from './editor/ghostText';
@@ -26,6 +27,18 @@ export default class SidekickPlugin extends Plugin {
 			id: 'open-chat',
 			name: 'Open chat',
 			callback: () => void this.activateView(),
+		});
+
+		this.addCommand({
+			id: 'purge-secrets',
+			name: 'Purge all stored secrets',
+			callback: () => {
+				purgeAllSecrets(this.app, SECURE_FIELDS);
+				for (const key of SECURE_FIELDS) {
+					(this.settings as unknown as Record<string, unknown>)[key] = '';
+				}
+				new Notice('All Sidekick secrets have been purged from local storage.');
+			},
 		});
 
 		// Editor context menu (Sidekick submenu for selected text)
@@ -58,11 +71,11 @@ export default class SidekickPlugin extends Plugin {
 			const url = s.cliUrl.trim();
 			this.copilot = new CopilotService({
 				cliUrl: url || undefined,
-				githubToken: s.githubToken || undefined,
+				githubToken: resolveEnvRef(s.githubToken) || undefined,
 			});
 		} else {
 			const loc = s.copilotLocation.trim();
-			let token = !s.useLoggedInUser && s.githubToken ? s.githubToken : undefined;
+			let token = !s.useLoggedInUser && s.githubToken ? resolveEnvRef(s.githubToken) : undefined;
 			// When useLoggedInUser is true but no explicit token is set,
 			// try to obtain a gh CLI token as a fallback. This helps when
 			// the Copilot CLI subprocess (spawned from Electron) can't access
@@ -98,7 +111,7 @@ export default class SidekickPlugin extends Plugin {
 	}
 
 	async connectTelegram(): Promise<void> {
-		const token = this.settings.telegramBotToken;
+		const token = resolveEnvRef(this.settings.telegramBotToken);
 		if (!token) throw new Error('No bot token configured.');
 		if (!this.telegramBot) {
 			this.telegramBot = new TelegramBotService(this);
