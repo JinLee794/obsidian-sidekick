@@ -5,6 +5,12 @@ All notable changes to the Sidekick plugin are documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/),
 and this project adheres to [Semantic Versioning](https://semver.org/).
 
+## [1.2.3-jinle] - 2026-04-02
+
+### Fixed
+
+- **Subagent failure loop**: when a subagent (e.g. M365) cannot access its required tools, the orchestrator now reports the failure to the user instead of re-invoking the same subagent repeatedly or spawning additional subagents to retry.
+
 ## [1.2.2-jinle] - 2026-04-01
 
 ### Added

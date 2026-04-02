@@ -311,6 +311,12 @@ export function installSessionConfigMixin(ViewClass: {prototype: unknown}): void
 				systemParts.push('Available MCP tools:\n' + toolCatalogParts.join('\n'));
 			}
 		}
+		if (customAgents.length > 0) {
+			systemParts.push(
+				'If a subagent fails or reports it cannot access its required tools, ' +
+				'report the failure to the user immediately — do not invoke the same subagent again or spawn additional subagents to retry.'
+			);
+		}
 		if (this.plugin.settings.contextMode === 'suggest') {
 			systemParts.push('Use on-demand file/search tools to gather vault context when needed instead of assuming local context is pre-attached.');
 		}
