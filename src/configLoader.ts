@@ -1,5 +1,5 @@
 import {App, normalizePath, TFile, TFolder} from 'obsidian';
-import type {AgentConfig, HandoffConfig, SkillInfo, McpServerEntry, McpAuthConfig, McpInputVariable, PromptConfig, TriggerConfig} from './types';
+import type {AgentConfig, HandoffConfig, SkillInfo, McpServerEntry, McpAuthConfig, McpInputVariable, PromptConfig, TriggerConfig, AgencyConfig} from './types';
 
 /** Module-level compiled regex for frontmatter detection. */
 const FM_RE = /^---\r?\n([\s\S]*?)\r?\n---\r?\n?([\s\S]*)$/;
@@ -327,6 +327,49 @@ function resolveConfigInputs(config: Record<string, unknown>, valueMap: Readonly
 
 /** Callback to resolve a missing input variable value. Return undefined to skip. */
 export type InputResolver = (input: McpInputVariable) => Promise<string | undefined>;
+
+/**
+ * Load agency configuration from agency.md in the tools folder.
+ * The file uses YAML frontmatter to control which agency services
+ * are shown and which are enabled by default.
+ *
+ * Example agency.md:
+ * ```
+ * ---
+ * services:
+ *   - mail
+ *   - calendar
+ *   - teams
+ * enabled:
+ *   - mail
+ * ---
+ * Optional notes about your agency setup.
+ * ```
+ */
+export async function loadAgencyConfig(app: App, toolsFolder: string): Promise<AgencyConfig> {
+	const filePath = normalizePath(`${toolsFolder}/agency.md`);
+	const file = app.vault.getAbstractFileByPath(filePath);
+	if (!file || !(file instanceof TFile)) return {};
+
+	try {
+		const content = await app.vault.read(file);
+		const {meta} = parseFrontmatter(content);
+
+		const toArray = (val: string | string[] | undefined): string[] | undefined => {
+			if (!val) return undefined;
+			if (Array.isArray(val)) return val.length > 0 ? val : undefined;
+			return val.length > 0 ? [val] : undefined;
+		};
+
+		return {
+			services: toArray(meta['services']),
+			enabled: toArray(meta['enabled']),
+		};
+	} catch (e) {
+		console.error('Sidekick: failed to parse agency.md', e);
+		return {};
+	}
+}
 
 /**
  * Load MCP server entries from mcp.json in the given vault tools folder.

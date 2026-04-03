@@ -6,6 +6,7 @@ import type {AgentConfig} from '../types';
 import {getSkillsFolder} from '../settings';
 import {FolderTreeModal, ToolApprovalModal} from '../modals';
 import {mapMcpServers, buildProviderConfig} from './sessionConfig';
+import {isAgencyService} from '../mcpProbe';
 
 declare module '../sidekickView' {
 	interface SidekickView {
@@ -207,7 +208,7 @@ export function installSearchPanel(ViewClass: { prototype: unknown }): void {
 				this.mcpServers.filter(s => allowed.has(s.name)).map(s => s.name)
 			);
 		} else {
-			this.searchEnabledMcpServers = new Set(this.mcpServers.map(s => s.name));
+			this.searchEnabledMcpServers = new Set(this.mcpServers.filter(s => !isAgencyService(s)).map(s => s.name));
 		}
 
 		// Skills: undefined = enable all, [] = disable all, [...] = enable listed

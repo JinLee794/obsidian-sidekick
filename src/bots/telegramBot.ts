@@ -11,10 +11,11 @@ import type {SessionConfig, CopilotSession, PermissionRequest, CustomAgentConfig
 import {approveAll} from '../copilot';
 import type {AgentConfig, SkillInfo, McpServerEntry} from '../types';
 import {getSkillsFolder, getMcpInputValue} from '../settings';
-import {loadAgents, loadSkills, loadMcpServers, loadInstructions} from '../configLoader';
+import {loadAgents, loadSkills, loadMcpServers, loadAgencyConfig, loadInstructions} from '../configLoader';
 import type {InputResolver} from '../configLoader';
 import {mapMcpServers, buildProviderConfig} from '../view/sessionConfig';
 import {resolveModelForAgent} from '../view/sessionConfig';
+import {discoverAgencyServers, isAgencyService} from '../mcpProbe';
 import type {TelegramMessage} from './telegramApi';
 import {TelegramApi, TelegramApiError} from './telegramApi';
 import type {BotConnectionStatus} from './types';
@@ -306,7 +307,7 @@ export class TelegramBotService {
 			const allowed = new Set(agent.tools);
 			enabledServers = new Set(this.mcpServers.filter(s => allowed.has(s.name)).map(s => s.name));
 		} else {
-			enabledServers = new Set(this.mcpServers.map(s => s.name));
+			enabledServers = new Set(this.mcpServers.filter(s => !isAgencyService(s)).map(s => s.name));
 		}
 		const mcpServers = mapMcpServers(this.mcpServers, enabledServers);
 
@@ -536,15 +537,27 @@ export class TelegramBotService {
 				return Promise.resolve(getMcpInputValue(app, this.plugin, input.id, isPassword));
 			};
 
-			const [agents, skills, mcpServers, globalInstructions] = await Promise.all([
+			const [agents, skills, mcpServers, agencyConfig, globalInstructions] = await Promise.all([
 				loadAgents(app, normalizePath(`${s.sidekickFolder}/agents`)),
 				loadSkills(app, normalizePath(`${s.sidekickFolder}/skills`)),
 				loadMcpServers(app, normalizePath(`${s.sidekickFolder}/tools`), inputResolver),
+				loadAgencyConfig(app, normalizePath(`${s.sidekickFolder}/tools`)),
 				loadInstructions(app, s.sidekickFolder),
 			]);
 			this.agents = agents;
 			this.skills = skills;
-			this.mcpServers = mcpServers;
+			// Merge agency-discovered services filtered by agency.md config
+			const configuredNames = new Set(mcpServers.map(s => s.name));
+			const serviceWhitelist = agencyConfig.services ? new Set(agencyConfig.services) : null;
+			const agencyServers = discoverAgencyServers().filter(s => {
+				if (configuredNames.has(s.name)) return false;
+				if (serviceWhitelist) {
+					const svcName = s.config['_agencyService'] as string;
+					return serviceWhitelist.has(svcName);
+				}
+				return true;
+			});
+			this.mcpServers = [...mcpServers, ...agencyServers];
 			this.globalInstructions = globalInstructions;
 		} catch (e) {
 			console.error('Sidekick Telegram: failed to reload configs', e);

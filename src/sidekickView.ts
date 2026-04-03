@@ -23,8 +23,8 @@ import type {
 	PermissionRequest,
 	ReasoningEffort,
 } from './copilot';
-import type {AgentConfig, SkillInfo, McpServerEntry, McpAuthConfig, McpInputVariable, McpToolInfo, PromptConfig, TriggerConfig, ChatMessage, ChatAttachment, SelectionInfo, ContextSuggestion} from './types';
-import {loadAgents, loadSkills, loadMcpServers, loadPrompts, loadTriggers, loadInstructions} from './configLoader';
+import type {AgentConfig, SkillInfo, McpServerEntry, McpAuthConfig, McpInputVariable, McpToolInfo, PromptConfig, TriggerConfig, ChatMessage, ChatAttachment, SelectionInfo, ContextSuggestion, AgencyConfig} from './types';
+import {loadAgents, loadSkills, loadMcpServers, loadAgencyConfig, loadPrompts, loadTriggers, loadInstructions} from './configLoader';
 import type {InputResolver} from './configLoader';
 import {getAgentsFolder, getSkillsFolder, getToolsFolder, getPromptsFolder, getTriggersFolder, getMcpInputValue, setMcpInputValue, McpInputPromptModal} from './settings';
 import {TriggerScheduler} from './triggerScheduler';
@@ -44,7 +44,7 @@ import {NewTriggerModal} from './triggerModal';
 import {debugTrace, setDebugEnabled} from './debug';
 import type {BackgroundSession} from './view/types';
 import {mapMcpServers, buildSdkAttachments, buildPrompt, buildProviderConfig} from './view/sessionConfig';
-import {probeAllMcpServers, isProxyOnlyServer, enrichServersWithAzureAuth, needsAzureAuth, clearAzureTokenCache} from './mcpProbe';
+import {probeAllMcpServers, probeMcpServer, isProxyOnlyServer, enrichServersWithAzureAuth, needsAzureAuth, clearAzureTokenCache, discoverAgencyServers, isAgencyService} from './mcpProbe';
 
 export const SIDEKICK_VIEW_TYPE = 'sidekick-view';
 
@@ -76,6 +76,7 @@ export class SidekickView extends ItemView {
 	selectedModel = '';
 	enabledSkills: Set<string> = new Set();
 	enabledMcpServers: Set<string> = new Set();
+	agencyConfig: AgencyConfig = {};
 	attachments: ChatAttachment[] = [];
 	suggestions: ContextSuggestion[] = [];
 	activeNotePath: string | null = null;
@@ -129,7 +130,7 @@ export class SidekickView extends ItemView {
 	sessionSort: 'modified' | 'created' | 'name' = 'modified';
 
 	// ── Tab state ────────────────────────────────────────────────
-	activeTab: 'chat' | 'triggers' | 'search' | 'tools' = 'chat';
+	activeTab: 'chat' | 'triggers' | 'search' | 'tools' | 'agency' | 'agents' = 'chat';
 
 	// ── Triggers panel state ─────────────────────────────────────
 	triggerHistoryFilter = '';
@@ -170,6 +171,9 @@ export class SidekickView extends ItemView {
 	searchPanelEl!: HTMLElement;
 	toolsPanelEl!: HTMLElement;
 	toolsMcpListEl!: HTMLElement;
+	agencyPanelEl!: HTMLElement;
+	toolsAgencyListEl!: HTMLElement;
+	agentsPanelEl!: HTMLElement;
 	toolsAgentListEl!: HTMLElement;
 	triggerHistoryListEl!: HTMLElement;
 	triggerConfigListEl!: HTMLElement;
@@ -341,18 +345,28 @@ export class SidekickView extends ItemView {
 		this.searchPanelEl = this.mainEl.createDiv({cls: 'sidekick-tab-panel sidekick-tab-panel-search is-hidden'});
 		this.buildSearchPanel(this.searchPanelEl);
 
-		// ── Tools panel ──────────────────────────────────────
+		// ── Tools panel (MCP servers only) ───────────────────
 		this.toolsPanelEl = this.mainEl.createDiv({cls: 'sidekick-tab-panel sidekick-tab-panel-tools is-hidden'});
 		this.buildToolsPanel(this.toolsPanelEl);
+
+		// ── Agency panel ─────────────────────────────────────
+		this.agencyPanelEl = this.mainEl.createDiv({cls: 'sidekick-tab-panel sidekick-tab-panel-agency is-hidden'});
+		this.buildAgencyPanel(this.agencyPanelEl);
+
+		// ── Agents panel ─────────────────────────────────────
+		this.agentsPanelEl = this.mainEl.createDiv({cls: 'sidekick-tab-panel sidekick-tab-panel-agents is-hidden'});
+		this.buildAgentsPanel(this.agentsPanelEl);
 	}
 
 	buildTabBar(parent: HTMLElement): void {
 		this.tabBarEl = parent.createDiv({cls: 'sidekick-tab-bar'});
-		const tabs: {id: 'chat' | 'triggers' | 'search' | 'tools'; icon: string; label: string}[] = [
+		const tabs: {id: 'chat' | 'triggers' | 'search' | 'tools' | 'agency' | 'agents'; icon: string; label: string}[] = [
 			{id: 'chat', icon: 'message-square', label: 'Chat'},
 			{id: 'triggers', icon: 'zap', label: 'Triggers'},
 			{id: 'search', icon: 'search', label: 'Search'},
 			{id: 'tools', icon: 'plug', label: 'Tools'},
+			{id: 'agency', icon: 'building-2', label: 'Agency'},
+			{id: 'agents', icon: 'bot', label: 'Agents'},
 		];
 		for (const tab of tabs) {
 			const btn = this.tabBarEl.createDiv({cls: 'sidekick-tab' + (tab.id === this.activeTab ? ' is-active' : '')});
@@ -364,7 +378,7 @@ export class SidekickView extends ItemView {
 		}
 	}
 
-	switchTab(tab: 'chat' | 'triggers' | 'search' | 'tools'): void {
+	switchTab(tab: 'chat' | 'triggers' | 'search' | 'tools' | 'agency' | 'agents'): void {
 		if (tab === this.activeTab) return;
 		this.activeTab = tab;
 
@@ -378,14 +392,25 @@ export class SidekickView extends ItemView {
 		this.triggersPanelEl.toggleClass('is-hidden', tab !== 'triggers');
 		this.searchPanelEl.toggleClass('is-hidden', tab !== 'search');
 		this.toolsPanelEl.toggleClass('is-hidden', tab !== 'tools');
+		this.agencyPanelEl.toggleClass('is-hidden', tab !== 'agency');
+		this.agentsPanelEl.toggleClass('is-hidden', tab !== 'agents');
 
-		// Refresh tools panel content when switching to it
-		if (tab === 'tools') {
-			this.renderToolsPanel();
-			// Probe MCP servers directly for tool discovery
-			if (this.enabledMcpServers.size > 0) {
-				void this.refreshMcpToolsList();
+		// Refresh panel content when switching to it
+		if (tab === 'tools' || tab === 'agency') {
+			if (tab === 'tools') this.renderMcpServersList();
+			if (tab === 'agency') this.renderAgencyServersList();
+			// Probe servers that haven't been discovered yet
+			const anyUnprobed = this.mcpServers.some(s => {
+				if (!this.enabledMcpServers.has(s.name)) return false;
+				const status = this.mcpServerStatus.get(s.name);
+				return !status || (!status.tools?.length && status.status !== 'pending');
+			});
+			if (anyUnprobed) {
+				this.scheduleMcpToolDiscovery();
 			}
+		}
+		if (tab === 'agents') {
+			this.renderAgentToolMappings();
 		}
 	}
 
@@ -678,10 +703,11 @@ export class SidekickView extends ItemView {
 			};
 
 			// Parallel-load all config files (independent I/O)
-			const [agents, skills, mcpServers, prompts, triggers, globalInstructions] = await Promise.all([
+			const [agents, skills, mcpServers, agencyConfig, prompts, triggers, globalInstructions] = await Promise.all([
 				loadAgents(this.app, getAgentsFolder(this.plugin.settings)),
 				loadSkills(this.app, getSkillsFolder(this.plugin.settings)),
 				loadMcpServers(this.app, getToolsFolder(this.plugin.settings), inputResolver),
+				loadAgencyConfig(this.app, getToolsFolder(this.plugin.settings)),
 				loadPrompts(this.app, getPromptsFolder(this.plugin.settings)),
 				loadTriggers(this.app, getTriggersFolder(this.plugin.settings)),
 				loadInstructions(this.app, this.plugin.settings.sidekickFolder),
@@ -691,7 +717,22 @@ export class SidekickView extends ItemView {
 
 			this.agents = agents;
 			this.skills = skills;
-			this.mcpServers = mcpServers;
+			this.agencyConfig = agencyConfig;
+
+			// Merge auto-discovered agency services with mcp.json entries.
+			// Servers explicitly configured in mcp.json take precedence.
+			// When agency.md specifies a `services` whitelist, filter to only those.
+			const configuredNames = new Set(mcpServers.map(s => s.name));
+			const serviceWhitelist = agencyConfig.services ? new Set(agencyConfig.services) : null;
+			const agencyServers = discoverAgencyServers().filter(s => {
+				if (configuredNames.has(s.name)) return false;
+				if (serviceWhitelist) {
+					const svcName = s.config['_agencyService'] as string;
+					return serviceWhitelist.has(svcName);
+				}
+				return true;
+			});
+			this.mcpServers = [...mcpServers, ...agencyServers];
 			this.prompts = prompts;
 			this.triggers = triggers;
 			this.globalInstructions = globalInstructions;
@@ -704,15 +745,39 @@ export class SidekickView extends ItemView {
 			// Preserve user toggle state across config reloads.
 			// First load: enable everything. Subsequent loads: keep existing
 			// enabled/disabled state, only adding newly-discovered entries.
+			// Agency services always re-sync from agency.md on every load.
 			const isReloadCheck = previousServerNames.size > 0;
 			isReload = isReloadCheck;
+
+			// Build agency defaults from agency.md (used in both paths)
+			const agencyDefaults = this.agencyConfig.enabled
+				? new Set(this.agencyConfig.enabled.map(s => `agency-${s}`))
+				: new Set<string>();
+
 			if (isReloadCheck) {
 				const newServerNames = new Set(this.mcpServers.map(s => s.name));
 				for (const name of [...this.enabledMcpServers]) {
 					if (!newServerNames.has(name)) this.enabledMcpServers.delete(name);
 				}
 				for (const name of newServerNames) {
-					if (!previousServerNames.has(name)) this.enabledMcpServers.add(name);
+					if (!previousServerNames.has(name)) {
+						// New non-agency servers auto-enable; new agency servers use defaults
+						const srv = this.mcpServers.find(s => s.name === name);
+						if (!srv || !isAgencyService(srv)) {
+							this.enabledMcpServers.add(name);
+						} else if (agencyDefaults.has(name)) {
+							this.enabledMcpServers.add(name);
+						}
+					}
+				}
+				// Re-sync existing agency services from agency.md on every reload
+				for (const srv of this.mcpServers) {
+					if (!isAgencyService(srv)) continue;
+					if (agencyDefaults.has(srv.name)) {
+						this.enabledMcpServers.add(srv.name);
+					} else {
+						this.enabledMcpServers.delete(srv.name);
+					}
 				}
 				const newSkillNames = new Set(this.skills.map(s => s.name));
 				for (const name of [...this.enabledSkills]) {
@@ -727,7 +792,12 @@ export class SidekickView extends ItemView {
 				}
 			} else {
 				this.enabledSkills = new Set(this.skills.map(s => s.name));
-				this.enabledMcpServers = new Set(this.mcpServers.map(s => s.name));
+				// Auto-enable mcp.json servers; agency services use agency.md `enabled` list
+				this.enabledMcpServers = new Set(
+					this.mcpServers
+						.filter(s => !isAgencyService(s) || agencyDefaults.has(s.name))
+						.map(s => s.name)
+				);
 				this.mcpServerStatus.clear();
 			}
 
@@ -842,12 +912,14 @@ export class SidekickView extends ItemView {
 			this.updateSearchConfigUI();
 		}
 
-		// Update tools panel if visible
-		if (this.activeTab === 'tools') {
-			this.renderToolsPanel();
-		}
+		// Pre-render all tool panels (even hidden) so they're ready when user switches tabs
+		this.renderMcpServersList();
+		this.renderAgencyServersList();
+		this.renderAgentToolMappings();
 
-		// Discover MCP tools in the background after config load
+		// Discover MCP tools in the background after config load.
+		// Always probe (even when the tools tab isn't visible) so results
+		// are ready when the user opens it.
 		if (this.enabledMcpServers.size > 0) {
 			this.scheduleMcpToolDiscovery();
 		}
@@ -1020,9 +1092,8 @@ export class SidekickView extends ItemView {
 					status: 'pending',
 					message: `MCP server '${server.name}': running auth flow...`,
 				});
-				if (this.activeTab === 'tools') {
-					this.renderMcpServersList();
-				}
+				this.renderMcpServersList();
+				this.renderAgencyServersList();
 
 				const ok = await this.runAuthRefresh(server.name, server.auth, {showSuccessNotice: false});
 				if (!ok) {
@@ -1030,9 +1101,8 @@ export class SidekickView extends ItemView {
 						status: 'error',
 						message: `MCP server '${server.name}': auth flow failed while enabling. Click the key button to retry.`,
 					});
-					if (this.activeTab === 'tools') {
-						this.renderMcpServersList();
-					}
+					this.renderMcpServersList();
+					this.renderAgencyServersList();
 					return false;
 				}
 			}
@@ -1045,11 +1115,50 @@ export class SidekickView extends ItemView {
 
 		this.configDirty = true;
 		this.updateToolsBadge();
-		if (this.activeTab === 'tools') {
-			this.renderMcpServersList();
-			this.renderAgentToolMappings();
+		this.renderMcpServersList();
+		this.renderAgencyServersList();
+		this.renderAgentToolMappings();
+
+		// Auto-probe the server for tools when enabling
+		if (enable) {
+			void this.probeServer(server);
 		}
+
 		return true;
+	}
+
+	/**
+	 * Probe a single server for tool discovery and update the UI.
+	 */
+	async probeServer(server: McpServerEntry): Promise<void> {
+		this.mcpServerStatus.set(server.name, {
+			status: 'pending',
+			message: 'Discovering tools…',
+		});
+		this.renderMcpServersList();
+		this.renderAgencyServersList();
+		try {
+			const result = await probeMcpServer(server);
+			if (result.tools.length > 0) {
+				this.mcpServerStatus.set(server.name, {
+					status: 'connected',
+					tools: result.tools,
+				});
+			} else if (result.error) {
+				this.mcpServerStatus.set(server.name, {
+					status: 'error',
+					message: result.error,
+					httpStatus: result.httpStatus,
+				});
+			}
+		} catch (e) {
+			this.mcpServerStatus.set(server.name, {
+				status: 'error',
+				message: e instanceof Error ? e.message : String(e),
+			});
+		}
+		this.renderMcpServersList();
+		this.renderAgencyServersList();
 	}
 
 	/**
@@ -1100,15 +1209,26 @@ export class SidekickView extends ItemView {
 	applyAgentToolsAndSkills(agent?: AgentConfig): void {
 		// Tools: undefined = enable all, [] = disable all, [...] = enable listed.
 		// Agent names in the tools list are sub-agent references, not MCP servers.
+		// Agency services always follow agency.md `enabled` defaults.
+		const agencyDefaults = this.agencyConfig.enabled
+			? new Set(this.agencyConfig.enabled.map(s => `agency-${s}`))
+			: new Set<string>();
+
 		if (agent?.tools !== undefined) {
 			const agentNames = new Set(this.agents.map(a => a.name));
 			const mcpOnly = agent.tools.filter(t => !agentNames.has(t));
 			const allowed = new Set(mcpOnly);
 			this.enabledMcpServers = new Set(
-				this.mcpServers.filter(s => allowed.has(s.name)).map(s => s.name)
+				this.mcpServers.filter(s =>
+					isAgencyService(s) ? agencyDefaults.has(s.name) : allowed.has(s.name)
+				).map(s => s.name)
 			);
 		} else {
-			this.enabledMcpServers = new Set(this.mcpServers.map(s => s.name));
+			this.enabledMcpServers = new Set(
+				this.mcpServers.filter(s =>
+					isAgencyService(s) ? agencyDefaults.has(s.name) : true
+				).map(s => s.name)
+			);
 		}
 
 		// Skills: undefined = enable all, [] = disable all, [...] = enable listed

@@ -3,8 +3,9 @@ import type {SidekickView} from '../sidekickView';
 import type {McpAuthConfig, McpToolInfo} from '../types';
 import {getToolsFolder, setMcpInputValue} from '../settings';
 import {McpEditorModal} from '../modals/mcpEditorModal';
+import {AgencyConfigModal} from '../modals/agencyConfigModal';
 import {debugTrace} from '../debug';
-import {probeAllMcpServers, isProxyOnlyServer, enrichServersWithAzureAuth, needsAzureAuth, clearAzureTokenCache} from '../mcpProbe';
+import {probeAllMcpServers, isProxyOnlyServer, isAgencyAvailable, isAgencyService, resetAgencyCache, enrichServersWithAzureAuth, needsAzureAuth, clearAzureTokenCache} from '../mcpProbe';
 
 export function installToolsPanel(ViewClass: {prototype: unknown}): void {
 	const proto = ViewClass.prototype as SidekickView;
@@ -30,7 +31,7 @@ export function installToolsPanel(ViewClass: {prototype: unknown}): void {
 		editBtn.addEventListener('click', () => {
 			const toolsFolder = getToolsFolder(this.plugin.settings);
 			new McpEditorModal(this.app, toolsFolder, () => {
-				void this.loadAllConfigs({silent: true}).then(() => this.renderToolsPanel());
+				void this.loadAllConfigs({silent: true}).then(() => this.renderMcpServersList());
 			}).open();
 		});
 		const refreshBtn = mcpControls.createEl('button', {
@@ -40,15 +41,55 @@ export function installToolsPanel(ViewClass: {prototype: unknown}): void {
 		setIcon(refreshBtn, 'refresh-cw');
 		refreshBtn.addEventListener('click', () => {
 			void this.loadAllConfigs({silent: true}).then(() => {
-				this.renderToolsPanel();
-				if (this.enabledMcpServers.size > 0) {
-					void this.refreshMcpToolsList();
-				}
+				this.renderMcpServersList();
+				this.scheduleMcpToolDiscovery();
 			});
 		});
 		this.toolsMcpListEl = mcpSection.createDiv({cls: 'sidekick-tools-list'});
+	};
 
-		// ── Agent tool mappings section ──────────────────────
+	proto.buildAgencyPanel = function(parent: HTMLElement): void {
+		const wrapper = parent.createDiv({cls: 'sidekick-tools-wrapper'});
+
+		const agencySection = wrapper.createDiv({cls: 'sidekick-tools-section'});
+		const agencyHeader = agencySection.createDiv({cls: 'sidekick-tools-header'});
+		agencyHeader.createDiv({cls: 'sidekick-tools-title', text: 'Agency services'});
+		const agencyControls = agencyHeader.createDiv({cls: 'sidekick-tools-controls'});
+		const agencyHint = agencyControls.createSpan({cls: 'sidekick-tools-agency-hint'});
+		agencyHint.setText('via agency CLI');
+		const agencySettingsBtn = agencyControls.createEl('button', {
+			cls: 'clickable-icon sidekick-triggers-ctrl-btn',
+			attr: {title: 'Configure agency services'},
+		});
+		setIcon(agencySettingsBtn, 'settings');
+		agencySettingsBtn.addEventListener('click', () => {
+			const toolsFolder = getToolsFolder(this.plugin.settings);
+			new AgencyConfigModal(this.app, toolsFolder, this.agencyConfig, () => {
+				resetAgencyCache();
+				void this.loadAllConfigs({silent: true}).then(() => {
+					this.renderAgencyServersList();
+					this.scheduleMcpToolDiscovery();
+				});
+			}).open();
+		});
+		const agencyRefreshBtn = agencyControls.createEl('button', {
+			cls: 'clickable-icon sidekick-triggers-ctrl-btn',
+			attr: {title: 'Refresh agency services'},
+		});
+		setIcon(agencyRefreshBtn, 'refresh-cw');
+		agencyRefreshBtn.addEventListener('click', () => {
+			resetAgencyCache();
+			void this.loadAllConfigs({silent: true}).then(() => {
+				this.renderAgencyServersList();
+				this.scheduleMcpToolDiscovery();
+			});
+		});
+		this.toolsAgencyListEl = agencySection.createDiv({cls: 'sidekick-tools-list'});
+	};
+
+	proto.buildAgentsPanel = function(parent: HTMLElement): void {
+		const wrapper = parent.createDiv({cls: 'sidekick-tools-wrapper'});
+
 		const agentSection = wrapper.createDiv({cls: 'sidekick-tools-section'});
 		const agentHeader = agentSection.createDiv({cls: 'sidekick-tools-header'});
 		agentHeader.createDiv({cls: 'sidekick-tools-title', text: 'Agent tool access'});
@@ -61,13 +102,15 @@ export function installToolsPanel(ViewClass: {prototype: unknown}): void {
 
 	proto.renderToolsPanel = function(): void {
 		this.renderMcpServersList();
-		this.renderAgentToolMappings();
 	};
 
 	proto.renderMcpServersList = function(): void {
 		this.toolsMcpListEl.empty();
 
-		if (this.mcpServers.length === 0) {
+		// Filter out agency-discovered servers — they go in their own section
+		const userServers = this.mcpServers.filter((s: {name: string; config: Record<string, unknown>}) => !isAgencyService(s));
+
+		if (userServers.length === 0) {
 			const empty = this.toolsMcpListEl.createDiv({cls: 'sidekick-tools-empty'});
 			empty.createSpan({text: 'No MCP servers configured. '});
 			const hint = empty.createSpan({cls: 'sidekick-tools-hint'});
@@ -75,7 +118,7 @@ export function installToolsPanel(ViewClass: {prototype: unknown}): void {
 			return;
 		}
 
-		for (const server of this.mcpServers) {
+		for (const server of userServers) {
 			const item = this.toolsMcpListEl.createDiv({cls: 'sidekick-tools-item'});
 			const enabled = this.enabledMcpServers.has(server.name);
 			const runtimeStatus = this.mcpServerStatus.get(server.name);
@@ -123,7 +166,11 @@ export function installToolsPanel(ViewClass: {prototype: unknown}): void {
 			// Note for proxy-only servers
 			if (enabled && isProxyOnlyServer(server) && !runtimeStatus?.tools?.length) {
 				const note = info.createDiv({cls: 'sidekick-tools-item-proxy-note'});
-				note.setText('Authenticated via Copilot SDK — tools discovered after session connects');
+				if (isAgencyAvailable()) {
+					note.setText('Proxied via agency CLI — discovering tools…');
+				} else {
+					note.setText('Install agency CLI (https://aka.ms/agency) to connect, or authenticate via Copilot SDK');
+				}
 			}
 
 			// Note for Azure-authenticated servers that failed
@@ -136,7 +183,10 @@ export function installToolsPanel(ViewClass: {prototype: unknown}): void {
 
 			// Server type
 			const cfg = server.config;
-			const serverType = (cfg['type'] as string | undefined) ?? (cfg['command'] ? 'local' : 'unknown');
+			const isAgencyProxied = isProxyOnlyServer(server) && isAgencyAvailable();
+			const serverType = isAgencyProxied
+				? 'agency'
+				: (cfg['type'] as string | undefined) ?? (cfg['command'] ? 'local' : 'unknown');
 			const typeTag = meta.createSpan({cls: 'sidekick-tools-tag'});
 			typeTag.setText(serverType);
 
@@ -180,12 +230,109 @@ export function installToolsPanel(ViewClass: {prototype: unknown}): void {
 						descEl.setAttribute('title', tool.description);
 					}
 				}
-			} else if (enabled && !isProxyOnlyServer(server)) {
+			} else if (enabled && (!isProxyOnlyServer(server) || isAgencyAvailable())) {
 				const pendingTag = meta.createSpan({cls: 'sidekick-tools-tag sidekick-tools-tag-muted'});
 				pendingTag.setText('Click refresh to discover tools');
 			}
 
 			// Toggle — use Obsidian's native toggle structure
+			const toggleContainer = item.createDiv({cls: 'checkbox-container sidekick-tools-toggle'});
+			toggleContainer.toggleClass('is-enabled', enabled);
+			const checkbox = toggleContainer.createEl('input', {type: 'checkbox'});
+			checkbox.checked = enabled;
+			checkbox.tabIndex = 0;
+			toggleContainer.addEventListener('click', (e) => {
+				if (e.target === checkbox) return;
+				checkbox.checked = !checkbox.checked;
+				checkbox.dispatchEvent(new Event('change'));
+			});
+			checkbox.addEventListener('change', () => {
+				const shouldEnable = checkbox.checked;
+				checkbox.disabled = true;
+				void this.setMcpServerEnabled(server, shouldEnable).finally(() => {
+					if (!checkbox.isConnected) return;
+					checkbox.disabled = false;
+					checkbox.checked = this.enabledMcpServers.has(server.name);
+					toggleContainer.toggleClass('is-enabled', checkbox.checked);
+				});
+			});
+		}
+	};
+
+	proto.renderAgencyServersList = function(): void {
+		this.toolsAgencyListEl.empty();
+		const agencyServers = this.mcpServers.filter((s: {name: string; config: Record<string, unknown>}) => isAgencyService(s));
+
+		if (agencyServers.length === 0) {
+			if (!isAgencyAvailable()) {
+				const empty = this.toolsAgencyListEl.createDiv({cls: 'sidekick-tools-empty'});
+				empty.setText('Agency CLI not installed. Get it at https://aka.ms/agency');
+			} else {
+				const empty = this.toolsAgencyListEl.createDiv({cls: 'sidekick-tools-empty'});
+				empty.setText('No agency services configured. Click the settings icon to add services.');
+			}
+			return;
+		}
+
+		for (const server of agencyServers) {
+			const item = this.toolsAgencyListEl.createDiv({cls: 'sidekick-tools-item'});
+			const enabled = this.enabledMcpServers.has(server.name);
+			const runtimeStatus = this.mcpServerStatus.get(server.name);
+
+			// Status dot
+			const statusDot = item.createSpan({cls: 'sidekick-tools-status-dot'});
+			if (runtimeStatus) {
+				statusDot.toggleClass('is-connected', runtimeStatus.status === 'connected');
+				statusDot.toggleClass('is-error', runtimeStatus.status === 'error');
+				statusDot.toggleClass('is-pending', runtimeStatus.status === 'pending');
+				statusDot.setAttribute('title', runtimeStatus.message || runtimeStatus.status);
+			} else {
+				statusDot.toggleClass('is-enabled', enabled);
+				statusDot.toggleClass('is-disabled', !enabled);
+				statusDot.setAttribute('title', enabled ? 'Enabled' : 'Disabled');
+			}
+
+			const info = item.createDiv({cls: 'sidekick-tools-item-info'});
+
+			// Service name (strip agency- prefix for display)
+			const serviceName = (server.config['_agencyService'] as string) || server.name;
+			const nameRow = info.createDiv({cls: 'sidekick-tools-item-name'});
+			nameRow.setText(serviceName);
+
+			// Description
+			const agencyDesc = server.config['_agencyDescription'] as string | undefined;
+			if (agencyDesc) {
+				const descEl = info.createDiv({cls: 'sidekick-tools-item-desc'});
+				descEl.setText(agencyDesc);
+			}
+
+			// Error message
+			if (runtimeStatus?.status === 'error' && runtimeStatus.message) {
+				const errMsg = info.createDiv({cls: 'sidekick-tools-item-error'});
+				errMsg.setText(runtimeStatus.message);
+			}
+
+			// Discovered tools
+			const discoveredTools = runtimeStatus?.tools;
+			if (discoveredTools && discoveredTools.length > 0) {
+				const details = info.createEl('details', {cls: 'sidekick-tools-discovered-details'});
+				const summary = details.createEl('summary', {cls: 'sidekick-tools-discovered-summary'});
+				summary.createSpan({cls: 'sidekick-tools-tag sidekick-tools-tag-accent', text: `${discoveredTools.length} tool(s) available`});
+				const toolsListEl = details.createDiv({cls: 'sidekick-tools-discovered'});
+				for (const tool of discoveredTools) {
+					const toolEl = toolsListEl.createDiv({cls: 'sidekick-tools-discovered-item'});
+					const dot = toolEl.createSpan({cls: 'sidekick-tools-discovered-dot'});
+					dot.toggleClass('is-connected', runtimeStatus?.status === 'connected');
+					toolEl.createSpan({cls: 'sidekick-tools-discovered-name', text: tool.name});
+					if (tool.description) {
+						const descEl = toolEl.createSpan({cls: 'sidekick-tools-discovered-desc'});
+						descEl.setText(tool.description);
+						descEl.setAttribute('title', tool.description);
+					}
+				}
+			}
+
+			// Toggle
 			const toggleContainer = item.createDiv({cls: 'checkbox-container sidekick-tools-toggle'});
 			toggleContainer.toggleClass('is-enabled', enabled);
 			const checkbox = toggleContainer.createEl('input', {type: 'checkbox'});
@@ -343,9 +490,8 @@ export function installToolsPanel(ViewClass: {prototype: unknown}): void {
 			this.addInfoMessage(`MCP: ${message}`);
 		}
 
-		if (this.activeTab === 'tools') {
-			this.renderMcpServersList();
-		}
+		this.renderMcpServersList();
+		this.renderAgencyServersList();
 
 		// When a server newly connects, try to discover tools via SDK
 		if (newlyConnected) {
@@ -366,7 +512,8 @@ export function installToolsPanel(ViewClass: {prototype: unknown}): void {
 						this.mcpServerStatus.set(name, {status: 'pending', message: 'Authenticating via Azure CLI…', tools: prev?.tools});
 					}
 				}
-				if (this.activeTab === 'tools') this.renderMcpServersList();
+				this.renderMcpServersList();
+				this.renderAgencyServersList();
 			}
 
 			const results = await probeAllMcpServers(this.mcpServers, this.enabledMcpServers);
@@ -397,9 +544,8 @@ export function installToolsPanel(ViewClass: {prototype: unknown}): void {
 				}
 			}
 
-			if (this.activeTab === 'tools') {
-				this.renderMcpServersList();
-			}
+			this.renderMcpServersList();
+			this.renderAgencyServersList();
 		} catch (e) {
 			debugTrace('refreshMcpToolsList error', {error: String(e)});
 		}
@@ -452,8 +598,9 @@ export function installToolsPanel(ViewClass: {prototype: unknown}): void {
 				}
 			}
 
-			if (updated && this.activeTab === 'tools') {
+			if (updated) {
 				this.renderMcpServersList();
+				this.renderAgencyServersList();
 			}
 		} catch (e) {
 			debugTrace('discoverToolsViaSdk error', {error: String(e)});
@@ -493,13 +640,31 @@ export function installToolsPanel(ViewClass: {prototype: unknown}): void {
 			message: status?.message,
 			tools,
 		});
-		if (this.activeTab === 'tools') {
-			this.renderMcpServersList();
-		}
+		this.renderMcpServersList();
+		this.renderAgencyServersList();
 	};
 
 	proto.scheduleMcpToolDiscovery = function(): void {
-		setTimeout(() => void this.refreshMcpToolsList(), 500);
+		// Show pending state immediately for enabled servers that need probing
+		let anyPending = false;
+		for (const server of this.mcpServers) {
+			if (!this.enabledMcpServers.has(server.name)) continue;
+			const existing = this.mcpServerStatus.get(server.name);
+			if (!existing || (!existing.tools?.length && existing.status !== 'pending')) {
+				this.mcpServerStatus.set(server.name, {
+					status: 'pending',
+					message: 'Discovering tools…',
+					tools: existing?.tools,
+				});
+				anyPending = true;
+			}
+		}
+		if (anyPending) {
+			this.renderMcpServersList();
+			this.renderAgencyServersList();
+		}
+		// Start probing immediately (no delay)
+		void this.refreshMcpToolsList();
 		// Also schedule SDK-based discovery for proxy-only servers
 		const hasProxy = this.mcpServers.some(
 			s => this.enabledMcpServers.has(s.name) && isProxyOnlyServer(s)
@@ -565,7 +730,8 @@ export function installToolsPanel(ViewClass: {prototype: unknown}): void {
 				this.configDirty = true;
 				this.updateToolsBadge();
 			}
-			this.renderToolsPanel();
+			if (this.activeTab === 'tools') this.renderMcpServersList();
+			if (this.activeTab === 'agency') this.renderAgencyServersList();
 			return true;
 		} catch (err: unknown) {
 			const msg = err instanceof Error ? err.message : String(err);

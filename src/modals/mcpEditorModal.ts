@@ -187,9 +187,9 @@ export class McpEditorModal extends Modal {
 				new Notice(`${name}: ${result.tools.length} tools found`);
 				this.updateServerResult(btn.parentElement!, 'connected', `${result.tools.length} tools`);
 			} else if (result.skipped) {
-				console.log(`⏭ ${name}: Skipped (proxy-only, auth handled by Copilot SDK)`);
-				new Notice(`${name}: Proxy-only — auth handled by Copilot SDK at runtime`);
-				this.updateServerResult(btn.parentElement!, 'skipped', 'SDK auth');
+				console.log(`⏭ ${name}: Skipped (proxy-only, no agency CLI — install via https://aka.ms/agency)`);
+				new Notice(`${name}: Install agency CLI (https://aka.ms/agency) to connect`);
+				this.updateServerResult(btn.parentElement!, 'skipped', 'needs agency CLI');
 			} else if (result.error) {
 				console.warn(`❌ ${name}: ${result.error}`);
 				if (result.httpStatus) console.log('HTTP status:', result.httpStatus);

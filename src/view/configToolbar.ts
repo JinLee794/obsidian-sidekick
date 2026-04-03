@@ -6,6 +6,7 @@ import {FolderTreeModal} from '../modals';
 import {EditModal} from '../modals/editModal';
 import {AgentEditorModal} from '../modals/agentEditorModal';
 import type {AgentEditorContext} from '../modals/agentEditorModal';
+import {isAgencyService} from '../mcpProbe';
 import {setDebugEnabled} from '../debug';
 
 declare module '../sidekickView' {
@@ -305,13 +306,24 @@ export function installConfigToolbar(ViewClass: { prototype: unknown }): void {
 
 	proto.applyAgentToolsAndSkills = function(agent?: AgentConfig): void {
 		// Tools: undefined = enable all, [] = disable all, [...] = enable listed
+		// Agency services always follow agency.md `enabled` defaults.
+		const agencyDefaults = this.agencyConfig?.enabled
+			? new Set(this.agencyConfig.enabled.map((s: string) => `agency-${s}`))
+			: new Set<string>();
+
 		if (agent?.tools !== undefined) {
 			const allowed = new Set(agent.tools);
 			this.enabledMcpServers = new Set(
-				this.mcpServers.filter(s => allowed.has(s.name)).map(s => s.name)
+				this.mcpServers.filter((s: {name: string; config: Record<string, unknown>}) =>
+					isAgencyService(s) ? agencyDefaults.has(s.name) : allowed.has(s.name)
+				).map((s: {name: string}) => s.name)
 			);
 		} else {
-			this.enabledMcpServers = new Set(this.mcpServers.map(s => s.name));
+			this.enabledMcpServers = new Set(
+				this.mcpServers.filter((s: {name: string; config: Record<string, unknown>}) =>
+					isAgencyService(s) ? agencyDefaults.has(s.name) : true
+				).map((s: {name: string}) => s.name)
+			);
 		}
 
 		// Skills: undefined = enable all, [] = disable all, [...] = enable listed

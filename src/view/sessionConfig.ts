@@ -9,24 +9,37 @@ import {resolveEnvRef} from '../secureStorage';
 import {ToolApprovalModal} from '../modals/toolApprovalModal';
 import {UserInputModal} from '../modals/userInputModal';
 import type {UserInputRequest} from '../modals/userInputModal';
-import {isProxyOnlyServer} from '../mcpProbe';
+import {isProxyOnlyServer, isAgencyAvailable, rewriteForAgency} from '../mcpProbe';
 import {debugTrace} from '../debug';
 
 /**
  * Map MCP server entries to MCPServerConfig objects, filtering by enabled set.
  *
- * Proxy-only servers (e.g. agent365 M365 servers) are excluded — they require
- * the Copilot CLI's own OAuth flow and are loaded from ~/.copilot/mcp-config.json
- * by the CLI binary automatically. Passing them in SessionConfig.mcpServers would
- * override the CLI's config and lose the OAuth context.
+ * Proxy-only servers (e.g. agent365 M365 servers) are normally excluded — they
+ * require the Copilot CLI's own OAuth flow. However, when the `agency` CLI is
+ * detected, these servers are transparently proxied through it as local stdio
+ * servers, with EntraID auth handled by agency.
  */
 export function mapMcpServers(mcpServers: McpServerEntry[], enabledMcpServers: Set<string>): Record<string, MCPServerConfig> {
 	const result: Record<string, MCPServerConfig> = {};
+	const hasAgency = isAgencyAvailable();
 	for (const server of mcpServers) {
 		if (!enabledMcpServers.has(server.name)) continue;
-		// Skip proxy-only servers — they're handled by the CLI's own OAuth
-		// via ~/.copilot/mcp-config.json loaded at startup.
-		if (isProxyOnlyServer(server)) continue;
+
+		// Proxy-only servers: route through agency if available, skip otherwise
+		if (isProxyOnlyServer(server)) {
+			if (!hasAgency) continue;
+			const rewritten = rewriteForAgency(server);
+			const args = (rewritten.config['args'] as string[] | undefined) ?? [];
+			debugTrace(`Agency proxy for ${server.name}: agency ${args.join(' ')}`);
+			result[server.name] = {
+				type: 'local',
+				command: rewritten.config['command'] as string,
+				args,
+				tools: (server.config['tools'] as string[] | undefined) ?? ['*'],
+			} as MCPServerConfig;
+			continue;
+		}
 		const cfg = server.config;
 		const serverType = cfg['type'] as string | undefined;
 		const tools = (cfg['tools'] as string[] | undefined) ?? ['*'];

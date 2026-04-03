@@ -48,6 +48,193 @@ export function isProxyOnlyServer(server: McpServerEntry): boolean {
 	return PROXY_ONLY_PATTERNS.some(p => p.test(url));
 }
 
+// ── Agency CLI proxy ────────────────────────────────────────────
+
+/**
+ * Whether the `agency` CLI binary is available on this machine.
+ * Checked once and cached. Agency (https://aka.ms/agency) can proxy
+ * agent365-hosted MCP servers locally with EntraID auth injection,
+ * allowing us to treat them as regular stdio servers.
+ */
+let agencyCached: boolean | null = null;
+/** Full resolved path to the agency binary (cached alongside availability). */
+let agencyPath: string | null = null;
+
+/** Build the PATH that includes the agency CLI install directory and common bin dirs. */
+function buildAgencySearchPath(): string {
+	const home = typeof process !== 'undefined' ? process.env['HOME'] || '' : '';
+	const extraDirs = ['/usr/local/bin', '/opt/homebrew/bin'];
+	if (home) {
+		extraDirs.push(`${home}/.local/bin`);
+		extraDirs.push(`${home}/.config/agency/CurrentVersion`);
+	}
+	return [...extraDirs, (typeof process !== 'undefined' ? process.env['PATH'] : '') || ''].join(':');
+}
+
+export function isAgencyAvailable(): boolean {
+	if (agencyCached !== null) return agencyCached;
+	const cp = nodeRequire?.('node:child_process') as typeof import('node:child_process') | undefined;
+	const fs = nodeRequire?.('node:fs') as typeof import('node:fs') | undefined;
+	if (!cp || !fs) { agencyCached = false; return false; }
+	try {
+		const searchPath = buildAgencySearchPath();
+		// Resolve the full path by scanning PATH directories for the binary.
+		// Avoids relying on `which` which may not be available in Electron.
+		let resolved = '';
+		for (const dir of searchPath.split(':')) {
+			if (!dir) continue;
+			const candidate = `${dir}/agency`;
+			try {
+				fs.accessSync(candidate, fs.constants.X_OK);
+				resolved = candidate;
+				break;
+			} catch { /* not found in this dir */ }
+		}
+		if (!resolved) { agencyCached = false; return false; }
+		agencyPath = resolved;
+		// Verify it actually runs
+		cp.execFileSync(agencyPath, ['--version'], {
+			timeout: 5_000,
+			stdio: 'pipe',
+		});
+		agencyCached = true;
+	} catch {
+		agencyCached = false;
+		agencyPath = null;
+	}
+	return agencyCached;
+}
+
+/** Get the resolved full path to the agency binary, or 'agency' as fallback. */
+export function getAgencyPath(): string {
+	return agencyPath ?? 'agency';
+}
+
+/** Reset agency availability cache (e.g. after install). */
+export function resetAgencyCache(): void {
+	agencyCached = null;
+	agencyPath = null;
+	agencyServicesCache = null;
+}
+
+/**
+ * Map of agent365 URL path segments → agency MCP subcommand names.
+ * Used to prefer named subcommands (shorter, better UX in logs)
+ * over the generic `agency mcp remote --url ...` fallback.
+ */
+const AGENCY_SERVICE_MAP: Record<string, string> = {
+	mcp_MailTools: 'mail',
+	mcp_CalendarTools: 'calendar',
+	mcp_TeamsTools: 'teams',
+	mcp_PlannerTools: 'planner',
+	mcp_SharePointTools: 'sharepoint',
+	mcp_WordTools: 'word',
+	mcp_M365CopilotChat: 'm365-copilot',
+	mcp_M365User: 'm365-user',
+};
+
+/**
+ * For an agent365 proxy-only server, produce a rewritten McpServerEntry
+ * that uses `agency mcp <service> --transport stdio` as a local stdio command.
+ * If the URL doesn't match a known subcommand, falls back to
+ * `agency mcp remote --url <url> --transport stdio`.
+ */
+export function rewriteForAgency(server: McpServerEntry): McpServerEntry {
+	const url = server.config['url'] as string | undefined;
+	if (!url) return server;
+
+	// Try to extract the service name from the URL path
+	const pathMatch = url.match(/\/servers\/(\w+)/);
+	const serviceName = pathMatch ? AGENCY_SERVICE_MAP[pathMatch[1]!] : undefined;
+
+	const args = serviceName
+		? ['mcp', serviceName, '--transport', 'stdio']
+		: ['mcp', 'remote', '--url', url, '--transport', 'stdio'];
+
+	return {
+		name: server.name,
+		config: {
+			command: getAgencyPath(),
+			args,
+		},
+		...(server.auth ? {auth: server.auth} : {}),
+	};
+}
+
+/**
+ * Check if a server can be proxied via agency instead of being treated as proxy-only.
+ */
+export function canUseAgencyProxy(server: McpServerEntry): boolean {
+	return isProxyOnlyServer(server) && isAgencyAvailable();
+}
+
+// ── Agency service discovery ────────────────────────────────────
+
+/** Subcommands that are infrastructure, not user-facing MCP services. */
+const AGENCY_INFRA_COMMANDS = new Set(['local', 'npx', 'remote', 'help']);
+
+/** Cached agency service list (null = not yet checked, empty = checked but none). */
+let agencyServicesCache: McpServerEntry[] | null = null;
+
+/**
+ * Discover named MCP services available through the `agency` CLI
+ * by parsing `agency mcp --help`. Returns synthetic McpServerEntry objects
+ * with `command: 'agency'` and `args: ['mcp', '<service>', '--transport', 'stdio']`.
+ *
+ * Results are cached for the lifetime of the process. Call `resetAgencyCache()`
+ * to clear.
+ */
+export function discoverAgencyServers(): McpServerEntry[] {
+	if (agencyServicesCache !== null) return agencyServicesCache;
+	if (!isAgencyAvailable()) { agencyServicesCache = []; return []; }
+
+	const cp = nodeRequire?.('node:child_process') as typeof import('node:child_process') | undefined;
+	if (!cp) { agencyServicesCache = []; return []; }
+
+	const fullPath = getAgencyPath();
+	try {
+		const result = cp.spawnSync(fullPath, ['mcp', '--help'], {
+			timeout: 5_000,
+			stdio: ['pipe', 'pipe', 'pipe'],
+			encoding: 'utf-8',
+		});
+
+		// Some CLI tools output --help to stderr; try both
+		const output = (result.stdout || '') + '\n' + (result.stderr || '');
+
+		const entries: McpServerEntry[] = [];
+		let inCommands = false;
+		for (const line of output.split('\n')) {
+			if (/^Commands:/.test(line)) { inCommands = true; continue; }
+			if (/^Options:/.test(line) || (/^\S/.test(line) && inCommands && !/^\s/.test(line))) break;
+			if (!inCommands) continue;
+			const m = line.match(/^\s{2}(\S+)\s{2,}(.+)/);
+			if (!m) continue;
+			const cmd = m[1]!;
+			const desc = m[2]!.trim();
+			if (AGENCY_INFRA_COMMANDS.has(cmd)) continue;
+			entries.push({
+				name: `agency-${cmd}`,
+				config: {
+					command: fullPath,
+					args: ['mcp', cmd, '--transport', 'stdio'],
+					_agencyService: cmd,
+					_agencyDescription: desc,
+				},
+			});
+		}
+		agencyServicesCache = entries;
+	} catch {
+		agencyServicesCache = [];
+	}
+	return agencyServicesCache;
+}
+
+/** Check if a server entry is an auto-discovered agency service. */
+export function isAgencyService(server: McpServerEntry): boolean {
+	return server.config['_agencyService'] !== undefined;
+}
+
 // ── Azure CLI auth ──────────────────────────────────────────────
 
 /**
@@ -401,6 +588,10 @@ function parseSseJsonRpc(sseText: string): {result?: Record<string, unknown>; er
  */
 export async function probeMcpServer(server: McpServerEntry): Promise<McpProbeResult> {
 	if (isProxyOnlyServer(server)) {
+		// If agency CLI is available, proxy the agent365 server through it
+		if (isAgencyAvailable()) {
+			return probeStdioServer(rewriteForAgency(server));
+		}
 		return {serverName: server.name, tools: [], skipped: true};
 	}
 	const cfg = server.config;

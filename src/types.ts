@@ -63,6 +63,17 @@ export interface McpServerEntry {
 	auth?: McpAuthConfig;
 }
 
+/**
+ * Configuration for agency CLI integration, parsed from agency.md.
+ * Controls which auto-discovered agency services are shown and their defaults.
+ */
+export interface AgencyConfig {
+	/** Whitelist of agency service names to display. Omit or empty = show all discovered. */
+	services?: string[];
+	/** Services to enable by default on first load. */
+	enabled?: string[];
+}
+
 /** A tool discovered from an MCP server via tools.list. */
 export interface McpToolInfo {
 	/** Tool identifier (e.g., "get_weather"). */
