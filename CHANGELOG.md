@@ -5,6 +5,23 @@ All notable changes to the Sidekick plugin are documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/),
 and this project adheres to [Semantic Versioning](https://semver.org/).
 
+## [1.2.4-jinle] - 2026-04-02
+
+### Added
+
+- **Agency CLI integration**: Auto-discovers all MCP services available through the [agency CLI](https://aka.ms/agency) (mail, calendar, teams, planner, sharepoint, word, m365-copilot, m365-user, ado, enghub, icm, kusto, and more) and makes them available as toggleable MCP servers with full tool discovery.
+- **Dedicated Agency tab**: Agency services now have their own tab in the sidebar (building-2 icon) separate from MCP Tools, with settings gear, refresh, and per-service toggles.
+- **Dedicated Agents tab**: Agent tool mappings moved to their own tab (bot icon) for a cleaner UI. Tab bar now has 6 tabs: Chat, Triggers, Search, Tools, Agency, Agents.
+- **Agency config modal**: Settings gear opens a guided modal to pick which agency services to show and which to auto-enable on startup. Saves to `sidekick/tools/agency.md`.
+- **`agency.md` configuration file**: YAML frontmatter controls service whitelist (`services`) and auto-enable list (`enabled`). Supports the same frontmatter parser as agents and prompts.
+- **Agent365 proxy rewrite**: MCP servers using agent365 URLs in `mcp.json` are transparently proxied through agency CLI with EntraID auth injection when agency is installed.
+
+### Fixed
+
+- **Agency servers now auto-enable on startup**: The `agency.md` `enabled` list is respected across all code paths — initial load, config reload, agent selection, and agent deselection. Previously, `applyAgentToolsAndSkills` would overwrite agency toggle state.
+- **ENOENT spawn errors**: Agency binary path is now resolved via filesystem scan (`fs.accessSync`) instead of `which`, which doesn't work reliably in Electron.
+- **Tool discovery responsiveness**: All panel renders are now unconditional (no `activeTab` gating), so tool discovery results appear immediately regardless of which tab is visible. Probing starts at plugin startup, not on first tab view.
+
 ## [1.2.3-jinle] - 2026-04-02
 
 ### Fixed
