@@ -72,37 +72,9 @@ function buildAgencySearchPath(): string {
 }
 
 export function isAgencyAvailable(): boolean {
-	if (agencyCached !== null) return agencyCached;
-	const cp = nodeRequire?.('node:child_process') as typeof import('node:child_process') | undefined;
-	const fs = nodeRequire?.('node:fs') as typeof import('node:fs') | undefined;
-	if (!cp || !fs) { agencyCached = false; return false; }
-	try {
-		const searchPath = buildAgencySearchPath();
-		// Resolve the full path by scanning PATH directories for the binary.
-		// Avoids relying on `which` which may not be available in Electron.
-		let resolved = '';
-		for (const dir of searchPath.split(':')) {
-			if (!dir) continue;
-			const candidate = `${dir}/agency`;
-			try {
-				fs.accessSync(candidate, fs.constants.X_OK);
-				resolved = candidate;
-				break;
-			} catch { /* not found in this dir */ }
-		}
-		if (!resolved) { agencyCached = false; return false; }
-		agencyPath = resolved;
-		// Verify it actually runs
-		cp.execFileSync(agencyPath, ['--version'], {
-			timeout: 5_000,
-			stdio: 'pipe',
-		});
-		agencyCached = true;
-	} catch {
-		agencyCached = false;
-		agencyPath = null;
-	}
-	return agencyCached;
+	// Pure cache read — priming must be done asynchronously via primeAgencyCache().
+	// Returns false if not yet primed.
+	return agencyCached === true;
 }
 
 /** Get the resolved full path to the agency binary, or 'agency' as fallback. */
@@ -115,6 +87,59 @@ export function resetAgencyCache(): void {
 	agencyCached = null;
 	agencyPath = null;
 	agencyServicesCache = null;
+}
+
+/**
+ * Asynchronously prime the agency availability and service-discovery caches.
+ * Call this once at startup (non-blocking). Subsequent sync calls to
+ * `isAgencyAvailable()` and `discoverAgencyServers()` will return from cache.
+ */
+export async function primeAgencyCache(): Promise<void> {
+	if (agencyCached !== null) return; // Already primed
+
+	const cp = nodeRequire?.('node:child_process') as typeof import('node:child_process') | undefined;
+	const fs = nodeRequire?.('node:fs') as typeof import('node:fs') | undefined;
+	if (!cp || !fs) { agencyCached = false; agencyServicesCache = []; return; }
+
+	// 1. Locate the binary (blocking fs.accessSync is < 1ms per dir — not a problem)
+	const searchPath = buildAgencySearchPath();
+	let resolved = '';
+	for (const dir of searchPath.split(':')) {
+		if (!dir) continue;
+		const candidate = `${dir}/agency`;
+		try { fs.accessSync(candidate, fs.constants.X_OK); resolved = candidate; break; } catch { /* skip */ }
+	}
+	if (!resolved) { agencyCached = false; agencyServicesCache = []; return; }
+	agencyPath = resolved;
+
+	// 2. Async verify it runs (non-blocking subprocess)
+	try {
+		await new Promise<void>((resolve, reject) => {
+			cp.execFile(resolved, ['--version'], {timeout: 3_000, stdio: 'pipe'} as Parameters<typeof cp.execFile>[2], (err) => {
+				if (err) reject(err); else resolve();
+			});
+		});
+		agencyCached = true;
+	} catch {
+		agencyCached = false;
+		agencyPath = null;
+		agencyServicesCache = [];
+		return;
+	}
+
+	// 3. Async service discovery
+	try {
+		const output = await new Promise<string>((resolve, reject) => {
+			cp.execFile(resolved, ['mcp', '--help'], {timeout: 3_000, maxBuffer: 100 * 1024} as Parameters<typeof cp.execFile>[2], (err, stdout, stderr) => {
+				// --help may exit with code 1 but still produce output
+				if (err && !stdout && !stderr) reject(err);
+				else resolve((stdout || '') + '\n' + (stderr || ''));
+			});
+		});
+		agencyServicesCache = parseAgencyHelpOutput(resolved, output);
+	} catch {
+		agencyServicesCache = [];
+	}
 }
 
 /**
@@ -185,49 +210,35 @@ let agencyServicesCache: McpServerEntry[] | null = null;
  * to clear.
  */
 export function discoverAgencyServers(): McpServerEntry[] {
-	if (agencyServicesCache !== null) return agencyServicesCache;
-	if (!isAgencyAvailable()) { agencyServicesCache = []; return []; }
+	// Pure cache read — must call primeAgencyCache() first.
+	// Returns empty array if cache has not been primed yet.
+	return agencyServicesCache ?? [];
+}
 
-	const cp = nodeRequire?.('node:child_process') as typeof import('node:child_process') | undefined;
-	if (!cp) { agencyServicesCache = []; return []; }
-
-	const fullPath = getAgencyPath();
-	try {
-		const result = cp.spawnSync(fullPath, ['mcp', '--help'], {
-			timeout: 5_000,
-			stdio: ['pipe', 'pipe', 'pipe'],
-			encoding: 'utf-8',
+/** Parse the text output of `agency mcp --help` into McpServerEntry objects. */
+function parseAgencyHelpOutput(fullPath: string, output: string): McpServerEntry[] {
+	const entries: McpServerEntry[] = [];
+	let inCommands = false;
+	for (const line of output.split('\n')) {
+		if (/^Commands:/.test(line)) { inCommands = true; continue; }
+		if (/^Options:/.test(line) || (/^\S/.test(line) && inCommands && !/^\s/.test(line))) break;
+		if (!inCommands) continue;
+		const m = line.match(/^\s{2}(\S+)\s{2,}(.+)/);
+		if (!m) continue;
+		const cmd = m[1]!;
+		const desc = m[2]!.trim();
+		if (AGENCY_INFRA_COMMANDS.has(cmd)) continue;
+		entries.push({
+			name: `agency-${cmd}`,
+			config: {
+				command: fullPath,
+				args: ['mcp', cmd, '--transport', 'stdio'],
+				_agencyService: cmd,
+				_agencyDescription: desc,
+			},
 		});
-
-		// Some CLI tools output --help to stderr; try both
-		const output = (result.stdout || '') + '\n' + (result.stderr || '');
-
-		const entries: McpServerEntry[] = [];
-		let inCommands = false;
-		for (const line of output.split('\n')) {
-			if (/^Commands:/.test(line)) { inCommands = true; continue; }
-			if (/^Options:/.test(line) || (/^\S/.test(line) && inCommands && !/^\s/.test(line))) break;
-			if (!inCommands) continue;
-			const m = line.match(/^\s{2}(\S+)\s{2,}(.+)/);
-			if (!m) continue;
-			const cmd = m[1]!;
-			const desc = m[2]!.trim();
-			if (AGENCY_INFRA_COMMANDS.has(cmd)) continue;
-			entries.push({
-				name: `agency-${cmd}`,
-				config: {
-					command: fullPath,
-					args: ['mcp', cmd, '--transport', 'stdio'],
-					_agencyService: cmd,
-					_agencyDescription: desc,
-				},
-			});
-		}
-		agencyServicesCache = entries;
-	} catch {
-		agencyServicesCache = [];
 	}
-	return agencyServicesCache;
+	return entries;
 }
 
 /** Check if a server entry is an auto-discovered agency service. */

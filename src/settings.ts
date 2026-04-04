@@ -59,6 +59,8 @@ export interface SidekickSettings {
 	contextMode: 'suggest' | 'auto';
 	/** Auto-route requests to the best-fit agent when agent is set to Auto. */
 	agentTriage: boolean;
+	/** Enable agency CLI integration for M365 and other services. */
+	agencyEnabled: boolean;
 
 	/** Telegram Bot ID (informational, not secret). */
 	telegramBotId: string;
@@ -118,6 +120,7 @@ export const DEFAULT_SETTINGS: SidekickSettings = {
 	searchMode: 'basic',
 	contextMode: 'suggest',
 	agentTriage: true,
+	agencyEnabled: true,
 	telegramBotId: '',
 	telegramBotToken: '',
 	telegramAllowedUsers: '',
@@ -884,6 +887,16 @@ export class SidekickSettingTab extends PluginSettingTab {
 				.setValue(this.plugin.settings.agentTriage)
 				.onChange(async (value) => {
 					this.plugin.settings.agentTriage = value;
+					await this.plugin.saveSettings();
+				}));
+
+		new Setting(capPanel)
+			.setName('Agency CLI integration')
+			.setDesc('Enable agency services (mail, calendar, teams, etc.) via the agency CLI. Disable to hide the Agency tab entirely.')
+			.addToggle(toggle => toggle
+				.setValue(this.plugin.settings.agencyEnabled)
+				.onChange(async (value) => {
+					this.plugin.settings.agencyEnabled = value;
 					await this.plugin.saveSettings();
 				}));
 

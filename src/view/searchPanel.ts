@@ -507,8 +507,13 @@ export function installSearchPanel(ViewClass: { prototype: unknown }): void {
 	proto.renderSearchResults = function (this: SidekickView, content: string): void {
 		this.searchResultsEl.empty();
 
+		// Fields handled explicitly — everything else rendered as extra metadata
+		const KNOWN_FIELDS = new Set(['file', 'path', 'folder', 'reason']);
+		// Fields to silently suppress (noisy / meaningless to users)
+		const SUPPRESSED_FIELDS = new Set(['close']);
+
 		// Try to parse JSON array from the response
-		let results: Array<{file?: string; path?: string; folder: string; reason: string}> = [];
+		let results: Array<Record<string, unknown>> = [];
 		try {
 			// Strip markdown fences if present
 			const cleaned = content.replace(/^```(?:json)?\s*/i, '').replace(/\s*```\s*$/, '').trim();
@@ -532,28 +537,65 @@ export function installSearchPanel(ViewClass: { prototype: unknown }): void {
 			const fileRow = item.createDiv({cls: 'sidekick-search-result-file'});
 			const fileIcon = fileRow.createSpan({cls: 'sidekick-search-result-icon'});
 			setIcon(fileIcon, 'file-text');
-			const filePath = (result.file || result.path || '').replace(/^\/+/, '');
+			const filePath = (String(result['file'] ?? result['path'] ?? '')).replace(/^\/+/, '');
+			const folder = result['folder'] ? String(result['folder']) : '';
 			const fileName = filePath.split('/').pop() || filePath || 'Unknown';
 			const fileLink = fileRow.createSpan({cls: 'sidekick-search-result-name', text: fileName});
 
+			// Resolve the TFile once so both click and hover can use it
+			const resolveFile = (): TFile | null => {
+				const f = this.app.vault.getAbstractFileByPath(filePath)
+					?? (folder ? this.app.vault.getAbstractFileByPath(folder + '/' + filePath) : null);
+				return f instanceof TFile ? f : null;
+			};
+
 			fileLink.addEventListener('click', () => {
 				if (!filePath) return;
-				const resolved = this.app.vault.getAbstractFileByPath(filePath)
-					?? (result.folder ? this.app.vault.getAbstractFileByPath(result.folder + '/' + filePath) : null);
-				if (resolved instanceof TFile) {
-					void this.app.workspace.openLinkText(resolved.path, '', false);
+				const file = resolveFile();
+				if (file) {
+					void this.app.workspace.getLeaf(false).openFile(file);
 				} else {
-					// Fallback: let Obsidian try to resolve the link
+					// Fallback: let Obsidian resolve by name
 					void this.app.workspace.openLinkText(filePath, '', false);
 				}
 			});
 
-			if (result.folder) {
-				fileRow.createSpan({cls: 'sidekick-search-result-folder', text: result.folder});
+			// Hover preview — triggers Obsidian's built-in popover
+			fileLink.addEventListener('mouseover', (e: MouseEvent) => {
+				if (!filePath) return;
+				this.app.workspace.trigger('hover-link', {
+					event: e,
+					source: 'sidekick-search',
+					hoverParent: item,
+					targetEl: fileLink,
+					linktext: filePath,
+					sourcePath: '',
+				});
+			});
+
+			if (folder) {
+				fileRow.createSpan({cls: 'sidekick-search-result-folder', text: folder});
 			}
 
-			if (result.reason) {
-				item.createDiv({cls: 'sidekick-search-result-reason', text: result.reason});
+			const reason = result['reason'] ? String(result['reason']) : '';
+			if (reason) {
+				item.createDiv({cls: 'sidekick-search-result-reason', text: reason});
+			}
+
+			// Render any extra metadata fields (owner, dealteam, etc.)
+			const extras: Array<{key: string; value: string}> = [];
+			for (const [key, val] of Object.entries(result)) {
+				if (KNOWN_FIELDS.has(key) || SUPPRESSED_FIELDS.has(key)) continue;
+				if (val === null || val === undefined || val === '') continue;
+				extras.push({key, value: String(val)});
+			}
+			if (extras.length > 0) {
+				const metaRow = item.createDiv({cls: 'sidekick-search-result-meta'});
+				for (const {key, value} of extras) {
+					const chip = metaRow.createSpan({cls: 'sidekick-search-result-meta-chip'});
+					chip.createSpan({cls: 'sidekick-search-result-meta-key', text: key});
+					chip.createSpan({cls: 'sidekick-search-result-meta-value', text: value});
+				}
 			}
 		}
 	};

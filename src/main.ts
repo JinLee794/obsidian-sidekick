@@ -51,7 +51,7 @@ export default class SidekickPlugin extends Plugin {
 		this.registerEditorExtension(buildGhostTextExtension(this));
 
 		try {
-			await this.initCopilot();
+			void this.initCopilot();
 		} catch (e) {
 			console.error('Sidekick: failed to initialize Copilot service', e);
 		}

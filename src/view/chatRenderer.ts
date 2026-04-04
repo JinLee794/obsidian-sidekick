@@ -32,6 +32,7 @@ declare module '../sidekickView' {
 		renderWelcome(): void;
 		updateSendButton(): void;
 		checkContextUsage(): void;
+		clearMessageComponents(): void;
 	}
 }
 
@@ -69,10 +70,13 @@ export function installChatRenderer(ViewClass: {prototype: unknown}): void {
 		this.scrollToBottom();
 	};
 
-	proto.renderMessageBubble = function (msg: ChatMessage): Promise<void> {
+	proto.renderMessageBubble = async function (msg: ChatMessage): Promise<void> {
 		if (msg.role === 'info') {
+			const scope = this.addChild(new Component());
+			this.messageComponents.set(msg.id, scope);
 			const el = this.chatContainer.createDiv({cls: 'sidekick-msg sidekick-msg-info'});
-			return renderMarkdownSafe(this.app, msg.content, el, this.streamingComponent ?? this);
+			await renderMarkdownSafe(this.app, msg.content, el, scope);
+			return;
 		}
 
 		const wrapper = this.chatContainer.createDiv({
@@ -196,7 +200,9 @@ export function installChatRenderer(ViewClass: {prototype: unknown}): void {
 		const body = bodyWrapper.createDiv({cls: 'sidekick-msg-body'});
 
 		if (msg.role === 'assistant') {
-			return renderMarkdownSafe(this.app, msg.content, body, this.streamingComponent ?? this);
+			const scope = this.addChild(new Component());
+			this.messageComponents.set(msg.id, scope);
+			await renderMarkdownSafe(this.app, msg.content, body, scope);
 		} else {
 			this.renderUserMessageContent(msg.content, body);
 			// Copy button for user messages
@@ -211,7 +217,13 @@ export function installChatRenderer(ViewClass: {prototype: unknown}): void {
 				setTimeout(() => setIcon(copyBtn, 'copy'), 1500);
 			});
 		}
-		return Promise.resolve();
+	};
+
+	proto.clearMessageComponents = function (): void {
+		for (const comp of this.messageComponents.values()) {
+			try { this.removeChild(comp); } catch { /* ignore */ }
+		}
+		this.messageComponents.clear();
 	};
 
 	/**
@@ -351,6 +363,18 @@ export function installChatRenderer(ViewClass: {prototype: unknown}): void {
 				timestamp: Date.now(),
 			};
 			this.messages.push(msg);
+			// Cap message history to prevent unbounded heap growth in long sessions
+			const MAX_MESSAGES = 200;
+			if (this.messages.length > MAX_MESSAGES) {
+				const evicted = this.messages.splice(0, this.messages.length - MAX_MESSAGES);
+				for (const m of evicted) {
+					const comp = this.messageComponents.get(m.id);
+					if (comp) {
+						try { this.removeChild(comp); } catch { /* ignore */ }
+						this.messageComponents.delete(m.id);
+					}
+				}
+			}
 		}
 
 		// Clean up incremental render timer and do final full render

@@ -44,7 +44,7 @@ import {NewTriggerModal} from './triggerModal';
 import {debugTrace, setDebugEnabled} from './debug';
 import type {BackgroundSession} from './view/types';
 import {mapMcpServers, buildSdkAttachments, buildPrompt, buildProviderConfig} from './view/sessionConfig';
-import {probeAllMcpServers, probeMcpServer, isProxyOnlyServer, enrichServersWithAzureAuth, needsAzureAuth, clearAzureTokenCache, discoverAgencyServers, isAgencyService} from './mcpProbe';
+import {probeAllMcpServers, probeMcpServer, isProxyOnlyServer, enrichServersWithAzureAuth, needsAzureAuth, clearAzureTokenCache, discoverAgencyServers, isAgencyService, primeAgencyCache} from './mcpProbe';
 
 export const SIDEKICK_VIEW_TYPE = 'sidekick-view';
 
@@ -108,6 +108,8 @@ export class SidekickView extends ItemView {
 	lastUsageInputTokens = 0;
 	activeToolCalls = new Map<string, {toolName: string; detailsEl: HTMLDetailsElement}>();
 	activeSubagentBlocks = new Map<string, HTMLElement>();
+	/** Per-message Component instances for scoped MarkdownRenderer lifecycle. */
+	messageComponents = new Map<string, Component>();
 
 	// ── Session-level context usage tracking ───────────────────
 	/** Latest input token count from the most recent turn — reflects current context window usage. */
@@ -264,7 +266,9 @@ export class SidekickView extends ItemView {
 		// Load persisted state before rendering lists
 		this.sessionNames = this.plugin.settings.sessionNames ?? {};
 
-		await this.loadAllConfigs();
+		// Fire config loading in the background — updateConfigUI() runs when done.
+		// Do not await: the view renders immediately and populates as data arrives.
+		void this.loadAllConfigs();
 		void this.loadSessions();
 
 		// Initialize trigger scheduler
@@ -368,14 +372,49 @@ export class SidekickView extends ItemView {
 			{id: 'agency', icon: 'building-2', label: 'Agency'},
 			{id: 'agents', icon: 'bot', label: 'Agents'},
 		];
+
+		// Inner scroll container — clips overflow without shifting layout
+		const tabsScroll = this.tabBarEl.createDiv({cls: 'sidekick-tabs-scroll'});
+
 		for (const tab of tabs) {
-			const btn = this.tabBarEl.createDiv({cls: 'sidekick-tab' + (tab.id === this.activeTab ? ' is-active' : '')});
+			const btn = tabsScroll.createDiv({cls: 'sidekick-tab' + (tab.id === this.activeTab ? ' is-active' : '')});
 			btn.dataset.tab = tab.id;
+			// Hide agency tab when disabled in settings
+			if (tab.id === 'agency' && !this.plugin.settings.agencyEnabled) {
+				btn.addClass('is-hidden');
+			}
 			const iconEl = btn.createSpan({cls: 'sidekick-tab-icon'});
 			setIcon(iconEl, tab.icon);
 			btn.createSpan({cls: 'sidekick-tab-label', text: tab.label});
 			btn.addEventListener('click', () => this.switchTab(tab.id));
 		}
+
+		// Overflow button — always in layout (uses visibility, not display) to avoid
+		// triggering ResizeObserver loops. Hidden via CSS class when not needed.
+		const overflowBtn = this.tabBarEl.createDiv({cls: 'sidekick-tab-overflow sidekick-tab-overflow-hidden'});
+		setIcon(overflowBtn, 'more-horizontal');
+		overflowBtn.setAttribute('title', 'More tabs');
+		overflowBtn.addEventListener('click', (e: MouseEvent) => {
+			const menu = new Menu();
+			for (const tab of tabs) {
+				if (tab.id === 'agency' && !this.plugin.settings.agencyEnabled) continue;
+				menu.addItem(item => item
+					.setTitle(tab.label)
+					.setIcon(tab.icon)
+					.setChecked(this.activeTab === tab.id)
+					.onClick(() => this.switchTab(tab.id)));
+			}
+			menu.showAtMouseEvent(e);
+		});
+
+		// Observe the PARENT (sidekick-main), not the tab bar itself,
+		// so DOM mutations inside the tab bar don't retrigger the observer.
+		const observer = new ResizeObserver(() => {
+			const hasOverflow = tabsScroll.scrollWidth > tabsScroll.clientWidth + 2;
+			overflowBtn.toggleClass('sidekick-tab-overflow-hidden', !hasOverflow);
+		});
+		observer.observe(parent);
+		this.register(() => observer.disconnect());
 	}
 
 	switchTab(tab: 'chat' | 'triggers' | 'search' | 'tools' | 'agency' | 'agents'): void {
@@ -702,6 +741,9 @@ export class SidekickView extends ItemView {
 				return value;
 			};
 
+			// Kick off agency cache priming in parallel with file I/O (async, non-blocking)
+			const agencyPrime = this.plugin.settings.agencyEnabled ? primeAgencyCache() : Promise.resolve();
+
 			// Parallel-load all config files (independent I/O)
 			const [agents, skills, mcpServers, agencyConfig, prompts, triggers, globalInstructions] = await Promise.all([
 				loadAgents(this.app, getAgentsFolder(this.plugin.settings)),
@@ -711,7 +753,9 @@ export class SidekickView extends ItemView {
 				loadPrompts(this.app, getPromptsFolder(this.plugin.settings)),
 				loadTriggers(this.app, getTriggersFolder(this.plugin.settings)),
 				loadInstructions(this.app, this.plugin.settings.sidekickFolder),
-			]);
+			] as const);
+			// Await priming completion (likely already done — file I/O takes longer than the subprocess check)
+			await agencyPrime;
 			const previousServerNames = new Set(this.mcpServers.map(s => s.name));
 			const previousSkillNames = new Set(this.skills.map(s => s.name));
 
@@ -720,19 +764,22 @@ export class SidekickView extends ItemView {
 			this.agencyConfig = agencyConfig;
 
 			// Merge auto-discovered agency services with mcp.json entries.
-			// Servers explicitly configured in mcp.json take precedence.
-			// When agency.md specifies a `services` whitelist, filter to only those.
-			const configuredNames = new Set(mcpServers.map(s => s.name));
-			const serviceWhitelist = agencyConfig.services ? new Set(agencyConfig.services) : null;
-			const agencyServers = discoverAgencyServers().filter(s => {
-				if (configuredNames.has(s.name)) return false;
-				if (serviceWhitelist) {
-					const svcName = s.config['_agencyService'] as string;
-					return serviceWhitelist.has(svcName);
-				}
-				return true;
-			});
-			this.mcpServers = [...mcpServers, ...agencyServers];
+			// Skip entirely when agency is disabled in settings.
+			if (this.plugin.settings.agencyEnabled) {
+				const configuredNames = new Set(mcpServers.map(s => s.name));
+				const serviceWhitelist = agencyConfig.services ? new Set(agencyConfig.services) : null;
+				const agencyServers = discoverAgencyServers().filter(s => {
+					if (configuredNames.has(s.name)) return false;
+					if (serviceWhitelist) {
+						const svcName = s.config['_agencyService'] as string;
+						return serviceWhitelist.has(svcName);
+					}
+					return true;
+				});
+				this.mcpServers = [...mcpServers, ...agencyServers];
+			} else {
+				this.mcpServers = mcpServers;
+			}
 			this.prompts = prompts;
 			this.triggers = triggers;
 			this.globalInstructions = globalInstructions;
@@ -801,21 +848,23 @@ export class SidekickView extends ItemView {
 				this.mcpServerStatus.clear();
 			}
 
-			// Populate model list: BYOK direct providers don't need a copilot connection
+			// Populate model list for BYOK providers synchronously (no CLI needed)
 			if (!options?.silent) {
 				const preset = this.plugin.settings.providerPreset;
 				const isByok = preset !== 'github';
 				if (isByok && this.plugin.settings.providerModel) {
 					const id = this.plugin.settings.providerModel;
 					this.models = [{id, name: id} as ModelInfo];
-				} else if (isByok) {
-					// BYOK providers without a model name: keep existing list
-				} else if (this.plugin.copilot) {
-					try {
-						this.models = await this.plugin.copilot.listModels();
-					} catch (err) {
-						console.warn('Sidekick: failed to load models', err);
-					}
+				}
+				// GitHub Copilot: fire model loading in background after file I/O finishes
+				// so the CLI binary startup does not block updateConfigUI/Notice.
+				if (!isByok && this.plugin.copilot) {
+					void this.plugin.copilot.listModels()
+						.then(models => {
+							this.models = models;
+							this.updateConfigUI({preserveToggles: true});
+						})
+						.catch(err => console.warn('Sidekick: failed to load models', err));
 				}
 			}
 		} catch (e) {
@@ -828,7 +877,7 @@ export class SidekickView extends ItemView {
 		this.updateConfigUI({preserveToggles: isReload});
 		this.configDirty = true;
 		if (!options?.silent) {
-			new Notice(`Loaded ${this.agents.length} agent(s), ${this.models.length} model(s), ${this.skills.length} skill(s), ${this.mcpServers.length} tool server(s), ${this.prompts.length} prompt(s), ${this.triggers.length} trigger(s).`);
+			new Notice(`Loaded ${this.agents.length} agent(s), ${this.skills.length} skill(s), ${this.mcpServers.length} tool server(s), ${this.prompts.length} prompt(s), ${this.triggers.length} trigger(s).`);
 		}
 	}
 
@@ -910,6 +959,16 @@ export class SidekickView extends ItemView {
 		// Update search panel dropdowns
 		if (this.searchAgentSelect) {
 			this.updateSearchConfigUI();
+		}
+
+		// Show/hide agency tab based on settings
+		const agencyTab = this.tabBarEl.querySelector('[data-tab="agency"]') as HTMLElement | null;
+		if (agencyTab) {
+			agencyTab.toggleClass('is-hidden', !this.plugin.settings.agencyEnabled);
+		}
+		// If agency is disabled and we're on the agency tab, switch to chat
+		if (!this.plugin.settings.agencyEnabled && this.activeTab === 'agency') {
+			this.switchTab('chat');
 		}
 
 		// Pre-render all tool panels (even hidden) so they're ready when user switches tabs

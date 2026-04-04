@@ -544,6 +544,7 @@ export function installChatSession(ViewClass: {prototype: unknown}): void {
 		this.sessionInputTokens = 0;
 		this.contextHintShown = false;
 		this.inputEl.removeAttribute('title');
+		this.clearMessageComponents();
 		this.chatContainer.empty();
 		this.renderWelcome();
 		this.renderAttachments();

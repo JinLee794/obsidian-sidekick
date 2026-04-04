@@ -494,6 +494,7 @@ export function installSessionSidebar(ViewClass: {prototype: unknown}): void {
 			this.streamingWrapperEl = null;
 			this.toolCallsContainer = null;
 			this.activeToolCalls.clear();
+			this.clearMessageComponents();
 			const renderPromises: Promise<void>[] = [];
 			for (const msg of this.messages) {
 				renderPromises.push(this.renderMessageBubble(msg));
@@ -565,6 +566,9 @@ export function installSessionSidebar(ViewClass: {prototype: unknown}): void {
 				bg.streamingWrapperEl = null;
 				bg.toolCallsContainer = null;
 				bg.activeToolCalls.clear();
+				if (bg.streamingComponent) {
+					try { this.removeChild(bg.streamingComponent); } catch { /* ignore */ }
+				}
 				bg.streamingComponent = null;
 				bg.turnStartTime = 0;
 				bg.turnToolsUsed = [];
@@ -588,6 +592,9 @@ export function installSessionSidebar(ViewClass: {prototype: unknown}): void {
 				bg.streamingWrapperEl = null;
 				bg.toolCallsContainer = null;
 				bg.activeToolCalls.clear();
+				if (bg.streamingComponent) {
+					try { this.removeChild(bg.streamingComponent); } catch { /* ignore */ }
+				}
 				bg.streamingComponent = null;
 				this.renderSessionList();
 			}),
@@ -639,6 +646,7 @@ export function installSessionSidebar(ViewClass: {prototype: unknown}): void {
 		this.isStreaming = false;
 		this.sessionInputTokens = 0;
 		this.contextHintShown = false;
+		this.clearMessageComponents();
 		this.chatContainer.empty();
 
 		// ── Check if the target session is already alive in background ──
