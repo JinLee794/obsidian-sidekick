@@ -5,6 +5,20 @@ All notable changes to the Sidekick plugin are documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/),
 and this project adheres to [Semantic Versioning](https://semver.org/).
 
+## [1.2.5-jinle] - 2026-04-04
+
+### Fixed
+
+- **Memory leak prevention**: Introduced scoped components for rendered messages to prevent orphaned child components across session transitions and clears. Added explicit cleanup methods called on session clear and switch.
+
+### Changed
+
+- **MCP probe refactor** (`mcpProbe.ts`): Cleaner agency CLI integration with improved binary resolution logic.
+- **Search panel** (`searchPanel.ts`): Handles additional metadata fields and improves file resolution robustness.
+- **Session sidebar** (`sessionSidebar.ts`): Minor improvements to tab management and display.
+- **Settings**: Added agency CLI integration toggle to plugin settings.
+- **Styles**: Improved tab management and overflow handling in the chat UI.
+
 ## [1.2.4-jinle] - 2026-04-02
 
 ### Added
