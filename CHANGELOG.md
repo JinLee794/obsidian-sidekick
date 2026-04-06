@@ -5,6 +5,24 @@ All notable changes to the Sidekick plugin are documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/),
 and this project adheres to [Semantic Versioning](https://semver.org/).
 
+## [1.2.6-jinle] - 2026-04-05
+
+### Changed
+
+- **Delegate orchestration to SDK**: Removed manual MCP tool catalog and skill catalog injection from the system message. The Copilot SDK now discovers tools and skills automatically from `mcpServers` and `skillDirectories` config — no duplicate catalog needed.
+- **SDK-native agent routing**: Removed the blocking `triageRequest()` LLM call that ran before every first message. Agent routing is now handled by the SDK via `customAgents[]` with `infer: true`. The "Automatic agent routing" setting controls the `infer` flag.
+- **Session resume on config changes**: `ensureSession()` now calls `resumeSession()` with updated config instead of tearing down and recreating the session. Falls back to `createSession()` only if resume fails. Preserves conversation context across config changes (model switch, tool toggle, etc.).
+- **Shared background event handler** (`bgEvents.ts`): Extracted the ~80-line background session event wiring (previously copy-pasted in `sidekickView.ts` and `sessionSidebar.ts`) into a single reusable `registerBackgroundEvents()` utility with a `BgEventCallbacks` interface for host-specific side-effects.
+- **Shared session config utilities**: Extracted `buildExcludedTools()` and `buildSystemParts()` as pure functions in `sessionConfig.ts`. Both `buildSessionConfig` (chat) and `buildSearchSessionConfig` (search) now call these instead of duplicating logic. Search mode now also respects agent-level `excludeTools`.
+- **Simplified MCP tool discovery**: Replaced the polling retry loop in `scheduleSdkToolDiscovery` (3 attempts × 5s) with a single delayed call. Tool discovery is now primarily event-driven via `handleMcpSessionEvent` on server connect.
+- **Lightweight skill/tool awareness hint**: System message includes a one-line nudge ("Skills and MCP tools are registered for this session") instead of the former full catalog dump.
+- **Prompt template cleanup**: Removed the hacky `"Do not invoke any skills for this request"` text injection when using `/prompt` templates. The `skipSkills` config flag handles this at the SDK level.
+
+### Added
+
+- **Test infrastructure**: Added vitest with 64 tests across 5 files covering all refactored code — `buildExcludedTools`, `buildSystemParts`, `registerBackgroundEvents`, session resume logic, triage removal, and source-level regression checks.
+- **Architecture diagram** (`docs/orchestration-diagram.html`): Interactive HTML visualization of the full agent orchestration pipeline — config loading, message flow, system message assembly, SDK events, data shapes, and a debug checklist.
+
 ## [1.2.5-jinle] - 2026-04-04
 
 ### Fixed
