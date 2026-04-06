@@ -10,6 +10,11 @@ export interface AgentConfig {
 	 * Empty array = no tools, undefined = all.
 	 */
 	tools?: string[];
+	/**
+	 * List of built-in SDK tool names to exclude (e.g. bash, read_bash, exec_py, view, edit).
+	 * These are added to the session's excludedTools and cannot be used by the agent.
+	 */
+	excludeTools?: string[];
 	/** List of skill names to enable. Empty/undefined = all. */
 	skills?: string[];
 	/**

@@ -1,4 +1,4 @@
-import {CopilotClient, CopilotSession, approveAll} from '@github/copilot-sdk';
+import {CopilotClient, CopilotSession, approveAll, defineTool} from '@github/copilot-sdk';
 import type {
 	ConnectionState,
 	CustomAgentConfig,
@@ -17,6 +17,7 @@ import type {
 	PermissionRequest,
 	PermissionRequestResult,
 	PermissionHandler,
+	Tool,
 } from '@github/copilot-sdk';
 import type {ProviderConfig, UserInputHandler, UserInputRequest, UserInputResponse, ReasoningEffort} from '@github/copilot-sdk/dist/types';
 
@@ -399,7 +400,7 @@ export class CopilotService {
 	}
 }
 
-export {approveAll};
+export {approveAll, defineTool};
 
 export type {
 	CopilotSession,
@@ -419,6 +420,7 @@ export type {
 	PermissionRequest,
 	PermissionRequestResult,
 	PermissionHandler,
+	Tool,
 	UserInputHandler,
 	UserInputRequest,
 	UserInputResponse,

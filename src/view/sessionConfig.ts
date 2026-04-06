@@ -1,7 +1,7 @@
 import {normalizePath, TFile, TFolder} from 'obsidian';
 import type {App} from 'obsidian';
-import type {MCPServerConfig, ModelInfo, MessageOptions, ProviderConfig, SessionConfig, ReasoningEffort, PermissionRequest, CustomAgentConfig} from '../copilot';
-import {approveAll} from '../copilot';
+import type {MCPServerConfig, ModelInfo, MessageOptions, ProviderConfig, SessionConfig, ReasoningEffort, PermissionRequest, CustomAgentConfig, Tool} from '../copilot';
+import {approveAll, defineTool} from '../copilot';
 import type {AgentConfig, McpServerEntry, ChatAttachment} from '../types';
 import type {SidekickView} from '../sidekickView';
 import {getSkillsFolder, getAgentsFolder as getAgentsFolderSetting} from '../settings';
@@ -11,6 +11,7 @@ import {UserInputModal} from '../modals/userInputModal';
 import type {UserInputRequest} from '../modals/userInputModal';
 import {isProxyOnlyServer, isAgencyAvailable, rewriteForAgency} from '../mcpProbe';
 import {debugTrace} from '../debug';
+import type {VaultIndex} from '../vaultIndex';
 
 /**
  * Map MCP server entries to MCPServerConfig objects, filtering by enabled set.
@@ -229,6 +230,205 @@ export function buildProviderConfig(settings: {
 	};
 }
 
+// ── Shared utilities ─────────────────────────────────────────
+
+/**
+ * Build the list of SDK tool names to exclude for a given agent.
+ * Shell tools are excluded by default; agents opt in by listing them in their tools array.
+ * If `alwaysExcludeShell` is true (e.g. search mode), all shell tools are blocked.
+ */
+export function buildExcludedTools(agent?: AgentConfig, alwaysExcludeShell = false): string[] {
+	const excluded: string[] = [];
+	if (alwaysExcludeShell) {
+		excluded.push('bash', 'read_bash', 'stop_bash', 'write_bash', 'list_bash');
+	} else {
+		const agentTools = agent?.tools;
+		if (!agentTools?.includes('bash')) excluded.push('bash', 'read_bash', 'stop_bash');
+		if (!agentTools?.includes('write_bash')) excluded.push('write_bash');
+		if (!agentTools?.includes('list_bash')) excluded.push('list_bash');
+	}
+	if (agent?.excludeTools) {
+		for (const t of agent.excludeTools) {
+			if (!excluded.includes(t)) excluded.push(t);
+		}
+	}
+	return excluded;
+}
+
+/**
+ * Build system message parts from global instructions + lightweight hints.
+ * Returns the assembled string or undefined if no parts.
+ */
+export function buildSystemParts(opts: {
+	globalInstructions?: string;
+	agentInstructions?: string;
+	hasMcpServers: boolean;
+	contextMode: string;
+	hasSkills: boolean;
+	hasMcpTools: boolean;
+}): string | undefined {
+	const parts: string[] = [];
+	if (opts.globalInstructions) parts.push(opts.globalInstructions);
+	if (opts.agentInstructions) parts.push(opts.agentInstructions);
+	if (opts.hasMcpServers) {
+		parts.push('If a tool call fails, report the error to the user — do not retry the same call.');
+	}
+	if (opts.hasSkills || opts.hasMcpTools) {
+		parts.push(
+			'Skills and MCP tools are registered for this session. ' +
+			'Use them when the request matches their capabilities.'
+		);
+	}
+	if (opts.contextMode === 'suggest') {
+		parts.push('Use on-demand file/search tools to gather vault context when needed instead of assuming local context is pre-attached.');
+	}
+	return parts.length > 0 ? parts.join('\n\n') : undefined;
+}
+
+// ── Custom vault tools (defineTool) ──────────────────────────────
+
+/**
+ * Build SDK custom tools that let the agent call back into the Obsidian vault.
+ * These are read-only tools — they never modify vault content.
+ */
+export function buildVaultTools(app: App, vaultIndex: VaultIndex | null): Tool<unknown>[] {
+	const tools: Tool<unknown>[] = [];
+
+	// vault_search — search notes by query using the vault index pre-filter
+	tools.push(defineTool('vault_search', {
+		description: 'Search for notes in the Obsidian vault by keyword. Returns matching notes ranked by relevance based on filename, tags, headings, aliases, and folder path. Use this to discover relevant notes before reading them.',
+		parameters: {
+			type: 'object',
+			properties: {
+				query: {type: 'string', description: 'Search query (keywords to match against note titles, tags, headings, aliases)'},
+				limit: {type: 'number', description: 'Maximum number of results to return (default: 15)'},
+				folder: {type: 'string', description: 'Optional folder path to scope the search (e.g. "Projects/web")'},
+			},
+			required: ['query'],
+		},
+		handler: async (args: unknown) => {
+			const {query, limit, folder} = args as {query: string; limit?: number; folder?: string};
+			if (!vaultIndex) return {error: 'Vault index not available'};
+			const scopePaths = folder ? [folder] : ['/'];
+			const candidates = vaultIndex.preFilter(query, scopePaths, limit ?? 15);
+			return candidates.map(c => ({
+				path: c.note.path,
+				name: c.note.name,
+				score: c.score,
+				matchReasons: c.matchReasons,
+				tags: c.note.tags,
+				headings: c.note.headings.slice(0, 5),
+				folder: c.note.folder,
+			}));
+		},
+	}) as Tool<unknown>);
+
+	// vault_read_note — read a note's full content by path
+	tools.push(defineTool('vault_read_note', {
+		description: 'Read the full content of a note in the Obsidian vault by its file path. Returns the raw markdown text. Use vault_search first to find the path.',
+		parameters: {
+			type: 'object',
+			properties: {
+				path: {type: 'string', description: 'Vault-relative path to the note (e.g. "Projects/web/README.md")'},
+			},
+			required: ['path'],
+		},
+		handler: async (args: unknown) => {
+			const {path} = args as {path: string};
+			const file = app.vault.getAbstractFileByPath(normalizePath(path));
+			if (!(file instanceof TFile)) return {error: `File not found: ${path}`};
+			const content = await app.vault.cachedRead(file);
+			return {path: file.path, content};
+		},
+	}) as Tool<unknown>);
+
+	// vault_list_folder — list files and subfolders in a vault directory
+	tools.push(defineTool('vault_list_folder', {
+		description: 'List files and subfolders in a vault directory. Returns names, types, and sizes. Useful for exploring vault structure.',
+		parameters: {
+			type: 'object',
+			properties: {
+				path: {type: 'string', description: 'Vault-relative folder path (e.g. "Projects" or "/" for root)'},
+			},
+			required: ['path'],
+		},
+		handler: async (args: unknown) => {
+			const {path: folderPath} = args as {path: string};
+			const normalized = folderPath === '/' ? '/' : normalizePath(folderPath);
+			const folder = normalized === '/'
+				? app.vault.getRoot()
+				: app.vault.getAbstractFileByPath(normalized);
+			if (!(folder instanceof TFolder)) return {error: `Folder not found: ${folderPath}`};
+			const items = folder.children.map(child => {
+				if (child instanceof TFile) {
+					return {name: child.name, type: 'file' as const, size: child.stat.size};
+				}
+				return {name: child.name, type: 'folder' as const};
+			});
+			items.sort((a, b) => {
+				if (a.type !== b.type) return a.type === 'folder' ? -1 : 1;
+				return a.name.localeCompare(b.name);
+			});
+			return {path: folderPath, items};
+		},
+	}) as Tool<unknown>);
+
+	// vault_note_metadata — get metadata for a specific note without reading full content
+	tools.push(defineTool('vault_note_metadata', {
+		description: 'Get metadata for a note including tags, aliases, headings, links, frontmatter properties, and modification time. Lighter than reading full content.',
+		parameters: {
+			type: 'object',
+			properties: {
+				path: {type: 'string', description: 'Vault-relative path to the note'},
+			},
+			required: ['path'],
+		},
+		handler: async (args: unknown) => {
+			const {path} = args as {path: string};
+			const file = app.vault.getAbstractFileByPath(normalizePath(path));
+			if (!(file instanceof TFile)) return {error: `File not found: ${path}`};
+			if (!vaultIndex) return {error: 'Vault index not available'};
+			const meta = vaultIndex.getNoteMetadata(file);
+			return {
+				path: meta.path,
+				name: meta.name,
+				folder: meta.folder,
+				tags: meta.tags,
+				aliases: meta.aliases,
+				headings: meta.headings,
+				links: meta.links,
+				backlinks: meta.backlinks,
+				frontmatter: meta.frontmatter,
+				mtime: meta.mtime,
+				size: meta.size,
+			};
+		},
+	}) as Tool<unknown>);
+
+	return tools;
+}
+
+// ── Session hooks ────────────────────────────────────────────────
+
+/**
+ * Build session hooks for error recovery and lifecycle logging.
+ */
+export function buildHooks(): NonNullable<SessionConfig['hooks']> {
+	return {
+		onErrorOccurred: async (input: {error: string; errorContext: string; recoverable: boolean}) => {
+			debugTrace('hook:onErrorOccurred', {
+				error: input.error,
+				errorContext: input.errorContext,
+				recoverable: input.recoverable,
+			});
+			if (input.recoverable) {
+				return {errorHandling: 'retry' as const, retryCount: 2};
+			}
+			return undefined;
+		},
+	};
+}
+
 // ── Mixin: methods installed onto SidekickView.prototype ─────────
 
 export function installSessionConfigMixin(ViewClass: {prototype: unknown}): void {
@@ -256,15 +456,16 @@ export function installSessionConfigMixin(ViewClass: {prototype: unknown}): void
 		}
 
 		// Custom agents — pass ALL agents so the SDK can route between them
-		// for delegation/handoff. The selected agent's instructions are also
-		// included in the system message when needed.
+		// for delegation/handoff. When agentTriage is enabled, set infer: true
+		// so the SDK can auto-route to the best-fit agent.
+		const allowInfer = this.plugin.settings.agentTriage;
 		const customAgents: CustomAgentConfig[] = this.agents.map(a => ({
 			name: a.name,
 			displayName: a.name,
 			description: a.description || undefined,
 			prompt: a.instructions,
 			tools: a.tools ?? null,
-			infer: true,
+			infer: allowInfer,
 		}));
 
 		// Determine shell tool exclusion from the selected agent's tool list.
@@ -272,10 +473,6 @@ export function installSessionConfigMixin(ViewClass: {prototype: unknown}): void
 		const selectedAgent = opts.selectedAgentName
 			? this.agents.find(a => a.name === opts.selectedAgentName)
 			: undefined;
-		const agentTools = selectedAgent?.tools;
-		const allowsBash = !!agentTools?.includes('bash');
-		const allowsWriteBash = !!agentTools?.includes('write_bash');
-		const allowsListBash = !!agentTools?.includes('list_bash');
 
 		// Permission handler
 		const permissionHandler = (request: PermissionRequest) => {
@@ -299,47 +496,25 @@ export function installSessionConfigMixin(ViewClass: {prototype: unknown}): void
 		const providerPreset = this.plugin.settings.providerPreset;
 		const reasoningEffort = this.plugin.settings.reasoningEffort;
 
-		// System message: global instructions + MCP tool catalog
-		// (agent-specific instructions are in customAgents[].prompt)
-		const systemParts: string[] = [];
-		if (this.globalInstructions) {
-			systemParts.push(this.globalInstructions);
-		}
-		if (mcpServerNames.length > 0) {
-			systemParts.push(
-				'Prefer MCP tools over bash/shell for external API calls. ' +
-				'If a tool call fails, report the error to the user — do not retry the same call.'
-			);
+		// System message: global instructions + lightweight behavioral hints.
+		// Tool/skill catalogs are NOT injected here — the SDK discovers them
+		// automatically from mcpServers and skillDirectories config.
+		// Agent-specific instructions are in customAgents[].prompt.
+		const finalSystemContent = buildSystemParts({
+			globalInstructions: this.globalInstructions,
+			hasMcpServers: mcpServerNames.length > 0,
+			contextMode: this.plugin.settings.contextMode,
+			hasSkills: skillDirs.length > 0,
+			hasMcpTools: mcpServerNames.length > 0,
+		});
 
-			// Include discovered tool catalog for proper routing
-			const toolCatalogParts: string[] = [];
-			for (const name of mcpServerNames) {
-				const status = this.mcpServerStatus.get(name);
-				if (status?.tools && status.tools.length > 0) {
-					const toolLines = status.tools.map(t => `  - ${t.name}: ${t.description}`);
-					toolCatalogParts.push(`MCP server "${name}" tools:\n${toolLines.join('\n')}`);
-				}
-			}
-			if (toolCatalogParts.length > 0) {
-				systemParts.push('Available MCP tools:\n' + toolCatalogParts.join('\n'));
-			}
-		}
-		if (customAgents.length > 0) {
-			systemParts.push(
-				'If a subagent fails or reports it cannot access its required tools, ' +
-				'report the failure to the user immediately — do not invoke the same subagent again or spawn additional subagents to retry.'
-			);
-		}
-		if (this.plugin.settings.contextMode === 'suggest') {
-			systemParts.push('Use on-demand file/search tools to gather vault context when needed instead of assuming local context is pre-attached.');
-		}
-		const finalSystemContent = systemParts.length > 0 ? systemParts.join('\n\n') : undefined;
+		const excludedTools = buildExcludedTools(selectedAgent);
 
-		const excludedTools: string[] = [];
-		// Exclude shell tools by default — agents opt back in via their tools array.
-		if (!allowsBash) excludedTools.push('bash');
-		if (!allowsWriteBash) excludedTools.push('write_bash');
-		if (!allowsListBash) excludedTools.push('list_bash');
+		// Custom vault tools — give the agent direct read-only access to the vault
+		const vaultTools = buildVaultTools(this.app, this.vaultIndex);
+
+		// Session hooks — error recovery for transient failures
+		const hooks = buildHooks();
 
 		debugTrace('buildSessionConfig', {
 			mcpServerCount: mcpServerNames.length,
@@ -351,8 +526,13 @@ export function installSessionConfigMixin(ViewClass: {prototype: unknown}): void
 					hasUrl: !!(mcpServers[name] as Record<string, unknown>)?.['url'],
 				}])
 			),
+			skillDirectories: skillDirs,
+			enabledSkills: this.skills.filter(s => this.enabledSkills.has(s.name)).map(s => s.name),
+			disabledSkills,
+			skipSkills: !!opts.skipSkills,
 			selectedAgent: opts.selectedAgentName,
 			excludedTools,
+			vaultToolCount: vaultTools.length,
 		});
 
 		return {
@@ -360,7 +540,9 @@ export function installSessionConfigMixin(ViewClass: {prototype: unknown}): void
 			streaming: providerPreset !== 'foundry-local',
 			onPermissionRequest: permissionHandler,
 			onUserInputRequest: userInputHandler,
+			hooks,
 			workingDirectory: this.getWorkingDirectory(),
+			...(vaultTools.length > 0 ? {tools: vaultTools} : {}),
 			...(reasoningEffort !== '' ? {reasoningEffort: reasoningEffort as ReasoningEffort} : {}),
 			...(provider ? {provider} : {}),
 			...(mcpServerNames.length > 0 ? {mcpServers} : {}),
@@ -370,33 +552,6 @@ export function installSessionConfigMixin(ViewClass: {prototype: unknown}): void
 			...(excludedTools.length > 0 ? {excludedTools} : {}),
 			...(finalSystemContent ? {systemMessage: {mode: 'append' as const, content: finalSystemContent}} : {}),
 		};
-	};
-
-	proto.triageRequest = async function(prompt: string): Promise<string | null> {
-		if (!this.plugin.copilot) return null;
-		if (this.agents.length <= 1) return null;
-		if (this.selectedAgent) return null;
-
-		const model = this.resolveModelForAgent(undefined, this.selectedModel || undefined);
-		const agentList = this.agents
-			.map(a => `- ${a.name}: ${a.description || 'no description'}`)
-			.join('\n');
-		const triagePrompt =
-			`Given these available agents:\n${agentList}\n\n` +
-			`Which single agent is the best fit for this request?\n` +
-			`Request: "${prompt.slice(0, 200)}"\n\n` +
-			`Respond with ONLY the agent name, nothing else. If none is a clear fit, respond "none".`;
-
-		try {
-			const result = await this.plugin.copilot.chat({prompt: triagePrompt, model});
-			const name = result?.trim();
-			if (!name || name.toLowerCase() === 'none') return null;
-
-			const exact = this.agents.find(a => a.name.toLowerCase() === name.toLowerCase());
-			return exact?.name ?? null;
-		} catch {
-			return null;
-		}
 	};
 
 	proto.getSessionExtras = function(): {

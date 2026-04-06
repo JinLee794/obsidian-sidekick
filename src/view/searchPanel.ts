@@ -5,7 +5,7 @@ import {approveAll} from '../copilot';
 import type {AgentConfig} from '../types';
 import {getSkillsFolder} from '../settings';
 import {FolderTreeModal, ToolApprovalModal} from '../modals';
-import {mapMcpServers, buildProviderConfig} from './sessionConfig';
+import {mapMcpServers, buildProviderConfig, buildExcludedTools, buildSystemParts} from './sessionConfig';
 import {isAgencyService} from '../mcpProbe';
 
 declare module '../sidekickView' {
@@ -324,10 +324,16 @@ export function installSearchPanel(ViewClass: { prototype: unknown }): void {
 		const searchAgent = this.searchAgent
 			? this.agents.find(a => a.name === this.searchAgent)
 			: undefined;
-		const systemParts: string[] = [];
-		if (this.globalInstructions) systemParts.push(this.globalInstructions);
-		if (searchAgent?.instructions) systemParts.push(searchAgent.instructions);
-		const searchSystemContent = systemParts.length > 0 ? systemParts.join('\n\n') : undefined;
+
+		// Use shared system message builder
+		const searchSystemContent = buildSystemParts({
+			globalInstructions: this.globalInstructions,
+			agentInstructions: searchAgent?.instructions,
+			hasMcpServers: Object.keys(mcpServers).length > 0,
+			contextMode: this.plugin.settings.contextMode,
+			hasSkills: skillDirs.length > 0,
+			hasMcpTools: Object.keys(mcpServers).length > 0,
+		});
 
 		// Permission handler
 		const permissionHandler = (request: PermissionRequest) => {
@@ -343,8 +349,8 @@ export function installSearchPanel(ViewClass: { prototype: unknown }): void {
 		const provider = buildProviderConfig(this.plugin.settings);
 		const providerPreset = this.plugin.settings.providerPreset;
 
-		// Exclude shell tools by default for search sessions
-		const excludedTools: string[] = ['bash', 'write_bash', 'list_bash'];
+		// Use shared excluded tools builder — always exclude shell in search mode
+		const excludedTools = buildExcludedTools(searchAgent, true);
 
 		return {
 			model: (provider && this.plugin.settings.providerModel) ? this.plugin.settings.providerModel : (this.searchModel || undefined),

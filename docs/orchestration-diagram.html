@@ -1,0 +1,953 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Sidekick — Agent Orchestration Architecture</title>
+<style>
+  :root {
+    --bg: #0d1117;
+    --surface: #161b22;
+    --surface2: #1c2333;
+    --border: #30363d;
+    --text: #e6edf3;
+    --text-dim: #8b949e;
+    --accent: #58a6ff;
+    --green: #3fb950;
+    --purple: #bc8cff;
+    --orange: #d29922;
+    --red: #f85149;
+    --pink: #f778ba;
+    --teal: #39d353;
+    --cyan: #79c0ff;
+    --radius: 10px;
+  }
+  * { box-sizing: border-box; margin: 0; padding: 0; }
+  body {
+    font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Helvetica, Arial, sans-serif;
+    background: var(--bg);
+    color: var(--text);
+    padding: 32px;
+    line-height: 1.5;
+  }
+
+  /* ── Header ── */
+  h1 { font-size: 28px; font-weight: 700; margin-bottom: 4px; }
+  .subtitle { color: var(--text-dim); font-size: 15px; margin-bottom: 32px; }
+
+  /* ── Legend ── */
+  .legend {
+    display: flex; flex-wrap: wrap; gap: 16px;
+    margin-bottom: 32px; padding: 14px 18px;
+    background: var(--surface); border: 1px solid var(--border); border-radius: var(--radius);
+  }
+  .legend-item { display: flex; align-items: center; gap: 6px; font-size: 13px; color: var(--text-dim); }
+  .legend-dot { width: 10px; height: 10px; border-radius: 50%; flex-shrink: 0; }
+
+  /* ── Sections ── */
+  .section { margin-bottom: 40px; }
+  .section-title {
+    font-size: 18px; font-weight: 600; margin-bottom: 14px;
+    display: flex; align-items: center; gap: 8px;
+  }
+  .section-num {
+    display: inline-flex; align-items: center; justify-content: center;
+    width: 26px; height: 26px; border-radius: 50%; font-size: 13px; font-weight: 700;
+    flex-shrink: 0;
+  }
+
+  /* ── Flow Diagram ── */
+  .flow {
+    display: flex; flex-wrap: wrap; align-items: flex-start; gap: 0;
+    padding: 20px; background: var(--surface); border: 1px solid var(--border); border-radius: var(--radius);
+  }
+  .flow-col { display: flex; flex-direction: column; align-items: center; min-width: 170px; }
+  .arrow-col { display: flex; align-items: center; justify-content: center; padding: 0 6px; min-height: 80px; }
+  .arrow-col svg { width: 36px; height: 20px; }
+  .arrow-col .arrow-label { font-size: 10px; color: var(--text-dim); text-align: center; margin-top: 2px; }
+
+  /* ── Cards ── */
+  .card {
+    border: 1px solid var(--border); border-radius: 8px;
+    padding: 12px 14px; width: 100%; background: var(--surface2);
+    position: relative;
+  }
+  .card + .card { margin-top: 8px; }
+  .card-file { font-size: 11px; font-family: 'SF Mono', Menlo, monospace; margin-bottom: 4px; opacity: .6; }
+  .card-name { font-size: 14px; font-weight: 600; }
+  .card-desc { font-size: 12px; color: var(--text-dim); margin-top: 4px; }
+  .card-badge {
+    display: inline-block; font-size: 10px; font-weight: 600; padding: 1px 6px;
+    border-radius: 10px; margin-top: 6px; text-transform: uppercase; letter-spacing: .3px;
+  }
+  .card.highlight { border-color: var(--accent); box-shadow: 0 0 0 1px var(--accent); }
+  .card.sdk      { border-left: 3px solid var(--green); }
+  .card.config   { border-left: 3px solid var(--purple); }
+  .card.ui       { border-left: 3px solid var(--cyan); }
+  .card.logic    { border-left: 3px solid var(--orange); }
+  .card.event    { border-left: 3px solid var(--pink); }
+  .card.vault    { border-left: 3px solid var(--teal); }
+
+  /* ── Big Flow Diagram ── */
+  .pipeline { width: 100%; overflow-x: auto; }
+  .pipeline-inner {
+    display: flex; align-items: stretch; gap: 0; min-width: max-content; padding: 4px 0;
+  }
+  .pipe-step {
+    display: flex; flex-direction: column; align-items: center; min-width: 150px; max-width: 190px;
+    flex: 1;
+  }
+  .pipe-box {
+    border: 1px solid var(--border); border-radius: 8px; padding: 10px 12px;
+    background: var(--surface2); width: 100%; text-align: center;
+  }
+  .pipe-box .step-num {
+    font-size: 11px; font-weight: 700; color: var(--accent); margin-bottom: 2px;
+  }
+  .pipe-box .step-title { font-size: 13px; font-weight: 600; }
+  .pipe-box .step-file { font-size: 10px; font-family: monospace; color: var(--text-dim); margin-top: 2px; }
+  .pipe-box .step-detail { font-size: 11px; color: var(--text-dim); margin-top: 4px; text-align: left; }
+  .pipe-arrow {
+    display: flex; align-items: center; justify-content: center;
+    width: 32px; flex-shrink: 0;
+  }
+  .pipe-arrow svg { width: 24px; height: 16px; }
+
+  /* ── Data Shape Tables ── */
+  .shape-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(300px, 1fr)); gap: 14px; }
+  .shape-card {
+    background: var(--surface2); border: 1px solid var(--border); border-radius: 8px;
+    padding: 14px 16px; font-size: 13px;
+  }
+  .shape-card h4 { font-size: 14px; font-weight: 600; margin-bottom: 6px; }
+  .shape-card .file-ref { font-size: 11px; font-family: monospace; color: var(--text-dim); margin-bottom: 8px; }
+  .shape-card code { font-family: 'SF Mono', Menlo, monospace; font-size: 12px; }
+  .shape-card pre {
+    background: var(--bg); border-radius: 6px; padding: 10px 12px;
+    overflow-x: auto; line-height: 1.6;
+  }
+  .shape-card .field { color: var(--cyan); }
+  .shape-card .type  { color: var(--orange); }
+  .shape-card .comment { color: var(--text-dim); font-style: italic; }
+
+  /* ── System Message Breakdown ── */
+  .sysmsg-stack { display: flex; flex-direction: column; gap: 0; max-width: 700px; }
+  .sysmsg-layer {
+    border: 1px solid var(--border); padding: 12px 16px;
+    background: var(--surface2); position: relative; font-size: 13px;
+  }
+  .sysmsg-layer:first-child { border-radius: 8px 8px 0 0; }
+  .sysmsg-layer:last-child  { border-radius: 0 0 8px 8px; }
+  .sysmsg-layer + .sysmsg-layer { border-top: none; }
+  .sysmsg-layer .layer-num {
+    display: inline-block; width: 20px; height: 20px; border-radius: 50%;
+    text-align: center; line-height: 20px; font-size: 11px; font-weight: 700;
+    margin-right: 8px; flex-shrink: 0;
+  }
+  .sysmsg-layer .layer-title { font-weight: 600; }
+  .sysmsg-layer .layer-detail { color: var(--text-dim); font-size: 12px; margin-top: 4px; }
+  .sysmsg-layer .layer-source { font-family: monospace; font-size: 11px; color: var(--text-dim); margin-top: 4px; }
+
+  /* ── Event Table ── */
+  table { width: 100%; border-collapse: collapse; font-size: 13px; }
+  th { text-align: left; padding: 8px 12px; border-bottom: 2px solid var(--border); color: var(--text-dim); font-weight: 600; font-size: 12px; text-transform: uppercase; letter-spacing: .5px; }
+  td { padding: 8px 12px; border-bottom: 1px solid var(--border); vertical-align: top; }
+  tr:last-child td { border-bottom: none; }
+  .mono { font-family: 'SF Mono', Menlo, monospace; font-size: 12px; }
+  .tag {
+    display: inline-block; font-size: 10px; font-weight: 600; padding: 1px 6px;
+    border-radius: 10px; text-transform: uppercase; letter-spacing: .3px;
+  }
+  .tag-stream { background: rgba(88,166,255,.15); color: var(--accent); }
+  .tag-tool   { background: rgba(210,153,34,.15);  color: var(--orange); }
+  .tag-skill  { background: rgba(188,140,255,.15); color: var(--purple); }
+  .tag-agent  { background: rgba(247,120,186,.15); color: var(--pink); }
+  .tag-meta   { background: rgba(63,185,80,.15);   color: var(--green); }
+
+  /* ── Connector Lines ── */
+  .connector { text-align: center; padding: 8px 0; }
+  .connector svg { width: 2px; height: 20px; }
+  .connector-label { font-size: 11px; color: var(--text-dim); }
+
+  /* ── Responsive ── */
+  @media (max-width: 800px) {
+    body { padding: 16px; }
+    .shape-grid { grid-template-columns: 1fr; }
+    .pipe-step { min-width: 130px; }
+  }
+</style>
+</head>
+<body>
+
+<h1>🧠 Sidekick Agent Orchestration</h1>
+<p class="subtitle">How user messages flow through config loading → session creation → Copilot SDK → streamed response</p>
+
+<!-- ── Legend ── -->
+<div class="legend">
+  <div class="legend-item"><div class="legend-dot" style="background:var(--green)"></div> Copilot SDK boundary</div>
+  <div class="legend-item"><div class="legend-dot" style="background:var(--purple)"></div> Config / data shaping</div>
+  <div class="legend-item"><div class="legend-dot" style="background:var(--cyan)"></div> UI / rendering</div>
+  <div class="legend-item"><div class="legend-dot" style="background:var(--orange)"></div> Business logic</div>
+  <div class="legend-item"><div class="legend-dot" style="background:var(--pink)"></div> Events / streaming</div>
+  <div class="legend-item"><div class="legend-dot" style="background:var(--teal)"></div> Vault / file system</div>
+</div>
+
+<!-- ═══════════════════════════════════════════════════════════════ -->
+<!-- SECTION 1 — FILES OVERVIEW                                     -->
+<!-- ═══════════════════════════════════════════════════════════════ -->
+<div class="section">
+  <div class="section-title">
+    <span class="section-num" style="background:var(--surface2);color:var(--accent);">1</span>
+    Key Files & What They Do
+  </div>
+  <div class="shape-grid">
+    <div class="card vault">
+      <div class="card-file">src/configLoader.ts</div>
+      <div class="card-name">Config Loader</div>
+      <div class="card-desc">Reads <strong>*.agent.md</strong>, <strong>*/SKILL.md</strong>, <strong>mcp.json</strong>,
+      <strong>*.prompt.md</strong>, <strong>*.trigger.md</strong>, <strong>*.instructions.md</strong> from vault folders.
+      Parses YAML frontmatter + markdown body. Returns typed arrays.</div>
+    </div>
+    <div class="card config">
+      <div class="card-file">src/view/sessionConfig.ts</div>
+      <div class="card-name">Session Config Builder</div>
+      <div class="card-desc">Assembles the <code>SessionConfig</code> object passed to the SDK:
+      model, MCP servers, skills, agents, system message, tool exclusions, BYOK provider.</div>
+    </div>
+    <div class="card logic">
+      <div class="card-file">src/view/chatSession.ts</div>
+      <div class="card-name">Chat Session Manager</div>
+      <div class="card-desc">Owns the full send flow: prompt building → triage → session creation → <code>session.send()</code>.
+      Registers all SDK event listeners. Manages session lifecycle.</div>
+    </div>
+    <div class="card sdk">
+      <div class="card-file">src/copilot.ts</div>
+      <div class="card-name">SDK Wrapper</div>
+      <div class="card-desc">Thin wrapper around <code>@github/copilot-sdk</code>.
+      Exposes <code>createSession()</code>, <code>chat()</code>, <code>listSessions()</code>,
+      <code>resumeSession()</code>, <code>listTools()</code>.</div>
+    </div>
+    <div class="card ui">
+      <div class="card-file">src/view/chatRenderer.ts</div>
+      <div class="card-name">Chat Renderer</div>
+      <div class="card-desc">Renders streamed content, tool call blocks, subagent blocks, token usage,
+      skill badges, and turn metadata footers in the chat DOM.</div>
+    </div>
+    <div class="card logic">
+      <div class="card-file">src/sidekickView.ts</div>
+      <div class="card-name">Sidekick View (Main)</div>
+      <div class="card-desc">The Obsidian <code>ItemView</code>. Orchestrates everything: stores loaded configs,
+      manages state, creates the sidebar UI, dispatches to mixins.</div>
+    </div>
+    <div class="card config">
+      <div class="card-file">src/types.ts</div>
+      <div class="card-name">Type Definitions</div>
+      <div class="card-desc">All shared interfaces: <code>AgentConfig</code>, <code>SkillInfo</code>,
+      <code>McpServerEntry</code>, <code>TriggerConfig</code>, <code>PromptConfig</code>, etc.</div>
+    </div>
+    <div class="card vault">
+      <div class="card-file">src/settings.ts</div>
+      <div class="card-name">Settings &amp; Scaffold</div>
+      <div class="card-desc">Plugin settings tab. Controls folder paths (<code>sidekick/agents</code>,
+      <code>sidekick/skills</code>, etc.), context mode, triage toggle, tool approval policy.</div>
+    </div>
+  </div>
+</div>
+
+<!-- ═══════════════════════════════════════════════════════════════ -->
+<!-- SECTION 2 — CONFIG LOADING FLOW                                -->
+<!-- ═══════════════════════════════════════════════════════════════ -->
+<div class="section">
+  <div class="section-title">
+    <span class="section-num" style="background:var(--surface2);color:var(--teal);">2</span>
+    Flow A: Config Loading (on plugin load &amp; reload)
+  </div>
+  <div class="pipeline">
+    <div class="flow" style="flex-direction:column;gap:14px;">
+
+      <!-- Row 1: Vault → ConfigLoader -->
+      <div style="display:flex;align-items:center;gap:0;flex-wrap:wrap;">
+        <div class="pipe-step">
+          <div class="pipe-box" style="border-left:3px solid var(--teal)">
+            <div class="step-num">1</div>
+            <div class="step-title">Vault Folders</div>
+            <div class="step-file">sidekick/</div>
+            <div class="step-detail">
+              <code>agents/*.agent.md</code><br>
+              <code>skills/*/SKILL.md</code><br>
+              <code>tools/mcp.json</code><br>
+              <code>prompts/*.prompt.md</code><br>
+              <code>triggers/*.trigger.md</code><br>
+              <code>*.instructions.md</code>
+            </div>
+          </div>
+        </div>
+        <div class="pipe-arrow"><svg viewBox="0 0 24 16"><path d="M4 8h16m-4-4l4 4-4 4" stroke="#58a6ff" stroke-width="2" fill="none" stroke-linecap="round"/></svg></div>
+        <div class="pipe-step">
+          <div class="pipe-box" style="border-left:3px solid var(--teal)">
+            <div class="step-num">2</div>
+            <div class="step-title">configLoader.ts</div>
+            <div class="step-file">loadAgents() loadSkills() loadMcpServers()</div>
+            <div class="step-detail">
+              Reads each file via <code>app.vault.read()</code>.<br>
+              Parses YAML frontmatter → typed objects.<br>
+              All loaders run in <strong>parallel</strong> via <code>Promise.all()</code>.
+            </div>
+          </div>
+        </div>
+        <div class="pipe-arrow"><svg viewBox="0 0 24 16"><path d="M4 8h16m-4-4l4 4-4 4" stroke="#58a6ff" stroke-width="2" fill="none" stroke-linecap="round"/></svg></div>
+        <div class="pipe-step">
+          <div class="pipe-box" style="border-left:3px solid var(--orange)">
+            <div class="step-num">3</div>
+            <div class="step-title">sidekickView.ts</div>
+            <div class="step-file">loadAllConfigs()</div>
+            <div class="step-detail">
+              Stores results on <code>this</code>:<br>
+              <code>agents: AgentConfig[]</code><br>
+              <code>skills: SkillInfo[]</code><br>
+              <code>mcpServers: McpServerEntry[]</code><br>
+              Syncs <code>enabledSkills</code> Set<br>
+              Syncs <code>enabledMcpServers</code> Set
+            </div>
+          </div>
+        </div>
+      </div>
+
+      <!-- Annotation -->
+      <div style="font-size:12px;color:var(--text-dim);padding-left:16px;">
+        💡 <strong>Key insight:</strong> Config is loaded once at startup, then reloaded on file changes.
+        The <code>enabledSkills</code> and <code>enabledMcpServers</code> Sets determine what actually reaches the SDK.
+        Agent-level filtering (<code>agent.skills</code> / <code>agent.tools</code>) narrows these further per session.
+      </div>
+    </div>
+  </div>
+</div>
+
+<!-- ═══════════════════════════════════════════════════════════════ -->
+<!-- SECTION 3 — MESSAGE SEND PIPELINE (THE BIG ONE)                -->
+<!-- ═══════════════════════════════════════════════════════════════ -->
+<div class="section">
+  <div class="section-title">
+    <span class="section-num" style="background:var(--surface2);color:var(--accent);">3</span>
+    Flow B: Sending a Message (the main pipeline)
+  </div>
+
+  <div class="pipeline">
+    <div class="flow" style="flex-direction:column;gap:0;">
+
+      <!-- Step 1: User types -->
+      <div style="display:flex;align-items:stretch;gap:0;flex-wrap:wrap;">
+        <div class="pipe-step" style="max-width:220px;">
+          <div class="pipe-box" style="border-left:3px solid var(--cyan)">
+            <div class="step-num">① User Input</div>
+            <div class="step-title">inputArea.ts</div>
+            <div class="step-detail">
+              User types message + optional:<br>
+              • <code>@agent</code> mention<br>
+              • <code>/prompt</code> template<br>
+              • File/folder attachments<br>
+              • Text selection<br>
+              • Clipboard paste
+            </div>
+          </div>
+        </div>
+        <div class="pipe-arrow"><svg viewBox="0 0 24 16"><path d="M4 8h16m-4-4l4 4-4 4" stroke="#58a6ff" stroke-width="2" fill="none" stroke-linecap="round"/></svg></div>
+        <div class="pipe-step" style="max-width:220px;">
+          <div class="pipe-box" style="border-left:3px solid var(--orange)">
+            <div class="step-num">② Prompt Build</div>
+            <div class="step-title">sessionConfig.ts</div>
+            <div class="step-file">buildPrompt()</div>
+            <div class="step-detail">
+              Inlines into prompt text:<br>
+              • Clipboard content<br>
+              • Selection text + line refs<br>
+              • Cursor position<br>
+              <em>If using /prompt:</em><br>
+              Prepends template + "Do not invoke skills"
+            </div>
+          </div>
+        </div>
+        <div class="pipe-arrow"><svg viewBox="0 0 24 16"><path d="M4 8h16m-4-4l4 4-4 4" stroke="#58a6ff" stroke-width="2" fill="none" stroke-linecap="round"/></svg></div>
+        <div class="pipe-step" style="max-width:220px;">
+          <div class="pipe-box" style="border-left:3px solid var(--orange)">
+            <div class="step-num">③ Attachments</div>
+            <div class="step-title">sessionConfig.ts</div>
+            <div class="step-file">buildSdkAttachments()</div>
+            <div class="step-detail">
+              Converts to SDK format:<br>
+              <code>{type:'file', path, displayName}</code><br>
+              <code>{type:'directory', path, displayName}</code><br>
+              Adds vault scope paths (de-duped)
+            </div>
+          </div>
+        </div>
+      </div>
+
+      <!-- Down arrow -->
+      <div class="connector">
+        <svg viewBox="0 0 2 20"><line x1="1" y1="0" x2="1" y2="20" stroke="#30363d" stroke-width="2"/></svg>
+        <div class="connector-label">↓ if agentTriage enabled &amp; no agent selected</div>
+      </div>
+
+      <!-- Step 2: Triage -->
+      <div style="display:flex;align-items:stretch;gap:0;flex-wrap:wrap;">
+        <div class="pipe-step" style="max-width:320px;">
+          <div class="pipe-box" style="border-left:3px solid var(--orange);border:1px dashed var(--orange);">
+            <div class="step-num">④ Agent Triage (optional)</div>
+            <div class="step-title">sessionConfig.ts → triageRequest()</div>
+            <div class="step-detail">
+              One-shot LLM call: "Given these agents, which fits this request?"<br>
+              Agents listed with names + descriptions.<br>
+              Response = agent name → sets <code>triageAgentForSession</code>.<br>
+              Sets <code>configDirty = true</code> so the session rebuilds.
+            </div>
+          </div>
+        </div>
+      </div>
+
+      <!-- Down arrow -->
+      <div class="connector">
+        <svg viewBox="0 0 2 20"><line x1="1" y1="0" x2="1" y2="20" stroke="#30363d" stroke-width="2"/></svg>
+        <div class="connector-label">↓ ensureSession()</div>
+      </div>
+
+      <!-- Step 3: Session Config -->
+      <div style="display:flex;align-items:stretch;gap:0;flex-wrap:wrap;">
+        <div class="pipe-step" style="max-width:500px;">
+          <div class="pipe-box highlight" style="border-left:3px solid var(--purple)">
+            <div class="step-num">⑤ Build Session Config — THE CRITICAL STEP</div>
+            <div class="step-title">sessionConfig.ts → buildSessionConfig()</div>
+            <div class="step-detail" style="display:grid;grid-template-columns:1fr 1fr;gap:8px;">
+              <div>
+                <strong style="color:var(--green)">→ What goes INTO the SDK:</strong><br>
+                <code>model</code> — resolved per agent<br>
+                <code>mcpServers</code> — mapped &amp; filtered<br>
+                <code>skillDirectories</code> — vault path<br>
+                <code>disabledSkills</code> — names list<br>
+                <code>customAgents</code> — all agents<br>
+                <code>excludedTools</code> — per-agent<br>
+                <code>systemMessage</code> — assembled<br>
+                <code>reasoningEffort</code> — from settings<br>
+                <code>provider</code> — BYOK config
+              </div>
+              <div>
+                <strong style="color:var(--orange)">→ System message layers:</strong><br>
+                1. Global instructions<br>
+                2. "Prefer MCP over bash"<br>
+                3. MCP tool catalog<br>
+                4. Subagent failure guidance<br>
+                5. <strong style="color:var(--purple)">Skill catalog + priority hint</strong><br>
+                6. Context mode guidance
+              </div>
+            </div>
+          </div>
+        </div>
+      </div>
+
+      <!-- Down arrow -->
+      <div class="connector">
+        <svg viewBox="0 0 2 20"><line x1="1" y1="0" x2="1" y2="20" stroke="#30363d" stroke-width="2"/></svg>
+        <div class="connector-label">↓ copilot.createSession(sessionConfig)</div>
+      </div>
+
+      <!-- Step 4: SDK Call -->
+      <div style="display:flex;align-items:stretch;gap:0;flex-wrap:wrap;">
+        <div class="pipe-step" style="max-width:220px;">
+          <div class="pipe-box" style="border-left:3px solid var(--green);background:rgba(63,185,80,.05)">
+            <div class="step-num">⑥ SDK: Create Session</div>
+            <div class="step-title">copilot.ts</div>
+            <div class="step-file">client.createSession(config)</div>
+            <div class="step-detail">
+              Starts a Copilot CLI process<br>
+              or connects to remote server.<br>
+              Returns: <code>CopilotSession</code>
+            </div>
+          </div>
+        </div>
+        <div class="pipe-arrow"><svg viewBox="0 0 24 16"><path d="M4 8h16m-4-4l4 4-4 4" stroke="#3fb950" stroke-width="2" fill="none" stroke-linecap="round"/></svg></div>
+        <div class="pipe-step" style="max-width:220px;">
+          <div class="pipe-box" style="border-left:3px solid var(--green);background:rgba(63,185,80,.05)">
+            <div class="step-num">⑦ SDK: Send Message</div>
+            <div class="step-title">chatSession.ts</div>
+            <div class="step-file">session.send({prompt, attachments})</div>
+            <div class="step-detail">
+              Sends the built prompt<br>
+              + SDK attachments.<br>
+              Response arrives as events  ↴
+            </div>
+          </div>
+        </div>
+        <div class="pipe-arrow"><svg viewBox="0 0 24 16"><path d="M4 8h16m-4-4l4 4-4 4" stroke="#f778ba" stroke-width="2" fill="none" stroke-linecap="round"/></svg></div>
+        <div class="pipe-step" style="max-width:220px;">
+          <div class="pipe-box" style="border-left:3px solid var(--pink)">
+            <div class="step-num">⑧ Event Stream</div>
+            <div class="step-title">chatSession.ts</div>
+            <div class="step-file">registerSessionEvents()</div>
+            <div class="step-detail">
+              Listens for 10+ event types.<br>
+              Routes to chatRenderer.ts<br>
+              for DOM updates.
+            </div>
+          </div>
+        </div>
+      </div>
+
+    </div>
+  </div>
+</div>
+
+<!-- ═══════════════════════════════════════════════════════════════ -->
+<!-- SECTION 4 — SYSTEM MESSAGE ASSEMBLY                            -->
+<!-- ═══════════════════════════════════════════════════════════════ -->
+<div class="section">
+  <div class="section-title">
+    <span class="section-num" style="background:var(--surface2);color:var(--purple);">4</span>
+    System Message Assembly (what the LLM actually sees)
+  </div>
+  <p style="font-size:13px;color:var(--text-dim);margin-bottom:14px;">
+    Built in <code>sessionConfig.ts → buildSessionConfig()</code>. Each layer is appended with <code>\n\n</code> separator.
+    The final string is sent as <code>systemMessage: {mode: 'append', content}</code> — meaning it's <em>appended</em> to
+    whatever the SDK's default system prompt is, not replacing it.
+  </p>
+  <div class="sysmsg-stack">
+
+    <div class="sysmsg-layer" style="border-left:3px solid var(--teal)">
+      <span class="layer-num" style="background:var(--teal);color:#0d1117">1</span>
+      <span class="layer-title">Global Instructions</span>
+      <div class="layer-detail">Concatenated content from all <code>*.instructions.md</code> files in the vault config folder.</div>
+      <div class="layer-source">Source: this.globalInstructions (loaded by configLoader.ts → loadInstructions())</div>
+    </div>
+
+    <div class="sysmsg-layer" style="border-left:3px solid var(--orange)">
+      <span class="layer-num" style="background:var(--orange);color:#0d1117">2</span>
+      <span class="layer-title">MCP Preference Rule</span>
+      <div class="layer-detail">"Prefer MCP tools over bash/shell for external API calls. If a tool call fails, report the error — do not retry."</div>
+      <div class="layer-source">Condition: only if mcpServers.length &gt; 0</div>
+    </div>
+
+    <div class="sysmsg-layer" style="border-left:3px solid var(--orange)">
+      <span class="layer-num" style="background:var(--orange);color:#0d1117">3</span>
+      <span class="layer-title">MCP Tool Catalog</span>
+      <div class="layer-detail">Full list of discovered MCP tools with names + descriptions, grouped by server.<br>
+        Example: <code>MCP server "m365" tools:\n  - mail:ListMessages: List emails...</code></div>
+      <div class="layer-source">Source: this.mcpServerStatus Map (populated after session.info events)</div>
+    </div>
+
+    <div class="sysmsg-layer" style="border-left:3px solid var(--pink)">
+      <span class="layer-num" style="background:var(--pink);color:#0d1117">4</span>
+      <span class="layer-title">Subagent Failure Guidance</span>
+      <div class="layer-detail">"If a subagent fails, report the failure immediately — do not retry or spawn additional subagents."</div>
+      <div class="layer-source">Condition: only if customAgents.length &gt; 0</div>
+    </div>
+
+    <div class="sysmsg-layer highlight" style="border-left:3px solid var(--purple)">
+      <span class="layer-num" style="background:var(--purple);color:#0d1117">5</span>
+      <span class="layer-title">⭐ Skill Catalog + Priority Hint</span>
+      <div class="layer-detail">
+        Lists all enabled skills with names + descriptions.<br>
+        Includes: "IMPORTANT: When a request matches an available skill, invoke that skill instead of performing
+        ad-hoc tool operations (grep, view, bash, etc.)."
+      </div>
+      <div class="layer-source">Source: this.skills filtered by this.enabledSkills — recently added to fix skill triggering</div>
+    </div>
+
+    <div class="sysmsg-layer" style="border-left:3px solid var(--cyan)">
+      <span class="layer-num" style="background:var(--cyan);color:#0d1117">6</span>
+      <span class="layer-title">Context Mode Guidance</span>
+      <div class="layer-detail">"Use on-demand file/search tools to gather vault context when needed."</div>
+      <div class="layer-source">Condition: only if contextMode === 'suggest'</div>
+    </div>
+
+  </div>
+  <div style="margin-top:12px;font-size:12px;color:var(--text-dim);padding:10px 16px;background:var(--surface2);border-radius:8px;border-left:3px solid var(--accent);max-width:700px;">
+    <strong>📌 Note:</strong> Agent-specific instructions are NOT in the system message.
+    They're passed separately in <code>customAgents[].prompt</code> — the SDK handles injecting
+    the selected agent's instructions during its own orchestration.
+  </div>
+</div>
+
+<!-- ═══════════════════════════════════════════════════════════════ -->
+<!-- SECTION 5 — SDK EVENT TYPES                                    -->
+<!-- ═══════════════════════════════════════════════════════════════ -->
+<div class="section">
+  <div class="section-title">
+    <span class="section-num" style="background:var(--surface2);color:var(--pink);">5</span>
+    SDK Events &amp; What Handles Them
+  </div>
+  <div style="overflow-x:auto;background:var(--surface);border:1px solid var(--border);border-radius:var(--radius);padding:4px;">
+    <table>
+      <thead>
+        <tr>
+          <th>Event</th>
+          <th>Type</th>
+          <th>Handler Location</th>
+          <th>What Happens</th>
+        </tr>
+      </thead>
+      <tbody>
+        <tr>
+          <td class="mono">assistant.message_delta</td>
+          <td><span class="tag tag-stream">Stream</span></td>
+          <td class="mono">chatSession.ts</td>
+          <td>Appends text chunk → re-renders markdown in streaming body</td>
+        </tr>
+        <tr>
+          <td class="mono">tool.execution_start</td>
+          <td><span class="tag tag-tool">Tool</span></td>
+          <td class="mono">chatSession.ts → chatRenderer.ts</td>
+          <td>Creates collapsible tool call block (name, args, spinner)</td>
+        </tr>
+        <tr>
+          <td class="mono">tool.execution_complete</td>
+          <td><span class="tag tag-tool">Tool</span></td>
+          <td class="mono">chatSession.ts → chatRenderer.ts</td>
+          <td>Removes spinner, shows result/error in tool block</td>
+        </tr>
+        <tr>
+          <td class="mono">skill.invoked</td>
+          <td><span class="tag tag-skill">Skill</span></td>
+          <td class="mono">chatSession.ts</td>
+          <td>Records skill name in <code>turnSkillsUsed[]</code>. Debug-logged.</td>
+        </tr>
+        <tr>
+          <td class="mono">subagent.started</td>
+          <td><span class="tag tag-agent">Agent</span></td>
+          <td class="mono">chatSession.ts → chatRenderer.ts</td>
+          <td>Creates subagent block with name badge + activity counter</td>
+        </tr>
+        <tr>
+          <td class="mono">subagent.completed</td>
+          <td><span class="tag tag-agent">Agent</span></td>
+          <td class="mono">chatSession.ts → chatRenderer.ts</td>
+          <td>Marks subagent block as done (green check)</td>
+        </tr>
+        <tr>
+          <td class="mono">subagent.failed</td>
+          <td><span class="tag tag-agent">Agent</span></td>
+          <td class="mono">chatSession.ts → chatRenderer.ts</td>
+          <td>Marks subagent block as failed (red X + error)</td>
+        </tr>
+        <tr>
+          <td class="mono">subagent.selected</td>
+          <td><span class="tag tag-agent">Agent</span></td>
+          <td class="mono">chatSession.ts</td>
+          <td>Debug-logged only — SDK internally routes to selected agent</td>
+        </tr>
+        <tr>
+          <td class="mono">assistant.usage</td>
+          <td><span class="tag tag-meta">Meta</span></td>
+          <td class="mono">chatSession.ts</td>
+          <td>Accumulates input/output/cache tokens for footer display</td>
+        </tr>
+        <tr>
+          <td class="mono">session.idle</td>
+          <td><span class="tag tag-meta">Meta</span></td>
+          <td class="mono">chatSession.ts → chatRenderer.ts</td>
+          <td>Finalizes streaming: renders footer (tokens, tools, skills), shows handoff buttons</td>
+        </tr>
+        <tr>
+          <td class="mono">session.info / .warning</td>
+          <td><span class="tag tag-meta">Meta</span></td>
+          <td class="mono">chatSession.ts</td>
+          <td>MCP server status updates (connection, tool discovery)</td>
+        </tr>
+      </tbody>
+    </table>
+  </div>
+</div>
+
+<!-- ═══════════════════════════════════════════════════════════════ -->
+<!-- SECTION 6 — DATA SHAPES                                        -->
+<!-- ═══════════════════════════════════════════════════════════════ -->
+<div class="section">
+  <div class="section-title">
+    <span class="section-num" style="background:var(--surface2);color:var(--orange);">6</span>
+    Key Data Shapes (TypeScript interfaces)
+  </div>
+  <div class="shape-grid">
+
+    <div class="shape-card">
+      <h4>SessionConfig</h4>
+      <div class="file-ref">copilot.ts (from @github/copilot-sdk)</div>
+      <pre><code>{
+  <span class="field">model</span>: <span class="type">string</span>,
+  <span class="field">streaming</span>: <span class="type">boolean</span>,
+  <span class="field">mcpServers</span>: <span class="type">Record&lt;string, MCPServerConfig&gt;</span>,
+  <span class="field">skillDirectories</span>: <span class="type">string[]</span>,
+  <span class="field">disabledSkills</span>: <span class="type">string[]</span>,
+  <span class="field">customAgents</span>: <span class="type">CustomAgentConfig[]</span>,
+  <span class="field">excludedTools</span>: <span class="type">string[]</span>,
+  <span class="field">systemMessage</span>: <span class="type">{mode:'append', content:string}</span>,
+  <span class="field">provider</span>?: <span class="type">ProviderConfig</span>,
+  <span class="field">reasoningEffort</span>?: <span class="type">'low'|'medium'|'high'</span>,
+  <span class="field">onPermissionRequest</span>: <span class="type">PermissionHandler</span>,
+  <span class="field">onUserInputRequest</span>: <span class="type">UserInputHandler</span>,
+  <span class="field">workingDirectory</span>: <span class="type">string</span>,
+}</code></pre>
+    </div>
+
+    <div class="shape-card">
+      <h4>AgentConfig</h4>
+      <div class="file-ref">src/types.ts</div>
+      <pre><code>{
+  <span class="field">name</span>: <span class="type">string</span>,
+  <span class="field">description</span>: <span class="type">string</span>,
+  <span class="field">model</span>?: <span class="type">string</span>,         <span class="comment">// preferred model</span>
+  <span class="field">tools</span>?: <span class="type">string[]</span>,       <span class="comment">// MCP servers + agents</span>
+  <span class="field">excludeTools</span>?: <span class="type">string[]</span>, <span class="comment">// SDK tools to block</span>
+  <span class="field">skills</span>?: <span class="type">string[]</span>,      <span class="comment">// [] = none, undefined = all</span>
+  <span class="field">handoffs</span>?: <span class="type">HandoffConfig[]</span>,
+  <span class="field">instructions</span>: <span class="type">string</span>,   <span class="comment">// markdown body</span>
+  <span class="field">filePath</span>: <span class="type">string</span>,
+}</code></pre>
+    </div>
+
+    <div class="shape-card">
+      <h4>SkillInfo</h4>
+      <div class="file-ref">src/types.ts</div>
+      <pre><code>{
+  <span class="field">name</span>: <span class="type">string</span>,        <span class="comment">// from frontmatter or folder name</span>
+  <span class="field">description</span>: <span class="type">string</span>, <span class="comment">// from SKILL.md frontmatter</span>
+  <span class="field">folderPath</span>: <span class="type">string</span>,  <span class="comment">// vault-relative path</span>
+}</code></pre>
+    </div>
+
+    <div class="shape-card">
+      <h4>CustomAgentConfig</h4>
+      <div class="file-ref">copilot.ts (SDK type)</div>
+      <pre><code>{
+  <span class="field">name</span>: <span class="type">string</span>,
+  <span class="field">displayName</span>: <span class="type">string</span>,
+  <span class="field">description</span>?: <span class="type">string</span>,
+  <span class="field">prompt</span>: <span class="type">string</span>,     <span class="comment">// agent instructions</span>
+  <span class="field">tools</span>: <span class="type">string[] | null</span>,
+  <span class="field">infer</span>: <span class="type">true</span>,        <span class="comment">// always true</span>
+}</code></pre>
+    </div>
+
+    <div class="shape-card">
+      <h4>MCPServerConfig (local)</h4>
+      <div class="file-ref">copilot.ts (SDK type)</div>
+      <pre><code>{
+  <span class="field">type</span>: <span class="type">'local'</span>,
+  <span class="field">command</span>: <span class="type">string</span>,     <span class="comment">// e.g. "npx"</span>
+  <span class="field">args</span>: <span class="type">string[]</span>,
+  <span class="field">tools</span>: <span class="type">string[]</span>,     <span class="comment">// ['*'] or specific names</span>
+  <span class="field">env</span>?: <span class="type">Record&lt;string, string&gt;</span>,
+  <span class="field">cwd</span>?: <span class="type">string</span>,
+}</code></pre>
+    </div>
+
+    <div class="shape-card">
+      <h4>MCPServerConfig (remote)</h4>
+      <div class="file-ref">copilot.ts (SDK type)</div>
+      <pre><code>{
+  <span class="field">type</span>: <span class="type">'http' | 'sse'</span>,
+  <span class="field">url</span>: <span class="type">string</span>,
+  <span class="field">tools</span>: <span class="type">string[]</span>,
+  <span class="field">headers</span>?: <span class="type">Record&lt;string, string&gt;</span>,
+  <span class="field">timeout</span>?: <span class="type">number</span>,
+}</code></pre>
+    </div>
+
+  </div>
+</div>
+
+<!-- ═══════════════════════════════════════════════════════════════ -->
+<!-- SECTION 7 — SKILLS vs MCP vs BUILT-IN                          -->
+<!-- ═══════════════════════════════════════════════════════════════ -->
+<div class="section">
+  <div class="section-title">
+    <span class="section-num" style="background:var(--surface2);color:var(--purple);">7</span>
+    How Skills, MCP Tools &amp; Built-in Tools Compare
+  </div>
+  <div style="overflow-x:auto;background:var(--surface);border:1px solid var(--border);border-radius:var(--radius);padding:4px;">
+    <table>
+      <thead>
+        <tr>
+          <th>Aspect</th>
+          <th style="color:var(--purple)">Skills</th>
+          <th style="color:var(--orange)">MCP Tools</th>
+          <th style="color:var(--green)">Built-in SDK Tools</th>
+        </tr>
+      </thead>
+      <tbody>
+        <tr>
+          <td><strong>Where defined</strong></td>
+          <td><code>skills/*/SKILL.md</code> in vault</td>
+          <td><code>tools/mcp.json</code> in vault</td>
+          <td>Inside the Copilot SDK itself</td>
+        </tr>
+        <tr>
+          <td><strong>How passed to SDK</strong></td>
+          <td><code>skillDirectories: [path]</code><br><code>disabledSkills: [names]</code></td>
+          <td><code>mcpServers: {name: config}</code></td>
+          <td>Implicit — always available unless excluded</td>
+        </tr>
+        <tr>
+          <td><strong>In system prompt?</strong></td>
+          <td>✅ Yes — name + description catalog + priority hint</td>
+          <td>✅ Yes — full tool catalog from discovery</td>
+          <td>❌ No — SDK manages internally</td>
+        </tr>
+        <tr>
+          <td><strong>How excluded</strong></td>
+          <td><code>disabledSkills</code> array</td>
+          <td>Filtered by <code>enabledMcpServers</code> Set</td>
+          <td><code>excludedTools</code> array</td>
+        </tr>
+        <tr>
+          <td><strong>Per-agent filter</strong></td>
+          <td><code>agent.skills: ['name1']</code><br>undefined = all, [] = none</td>
+          <td><code>agent.tools: ['server1']</code><br>undefined = all, [] = none</td>
+          <td><code>agent.excludeTools: ['bash']</code></td>
+        </tr>
+        <tr>
+          <td><strong>Event when used</strong></td>
+          <td><code>skill.invoked</code></td>
+          <td><code>tool.execution_start/complete</code></td>
+          <td><code>tool.execution_start/complete</code></td>
+        </tr>
+        <tr>
+          <td><strong>UI indicator</strong></td>
+          <td>🪄 wand icon + "N skills" in footer</td>
+          <td>🔧 wrench icon + "N tools" in footer</td>
+          <td>🔧 same as MCP tools</td>
+        </tr>
+        <tr>
+          <td><strong>Debug logging</strong></td>
+          <td><code>debugTrace('skill.invoked', {name})</code></td>
+          <td><code>debugTrace('tool.execution_*', ...)</code></td>
+          <td>Same as MCP tools</td>
+        </tr>
+      </tbody>
+    </table>
+  </div>
+</div>
+
+<!-- ═══════════════════════════════════════════════════════════════ -->
+<!-- SECTION 8 — AGENT ROUTING / HANDOFF                            -->
+<!-- ═══════════════════════════════════════════════════════════════ -->
+<div class="section">
+  <div class="section-title">
+    <span class="section-num" style="background:var(--surface2);color:var(--pink);">8</span>
+    Agent Routing, Triage &amp; Handoffs
+  </div>
+  <div class="pipeline">
+    <div class="flow" style="flex-direction:column;gap:14px;">
+      <div style="display:flex;align-items:stretch;gap:0;flex-wrap:wrap;">
+        <div class="pipe-step" style="max-width:200px;">
+          <div class="pipe-box" style="border-left:3px solid var(--cyan)">
+            <div class="step-title">User sends message</div>
+            <div class="step-detail">No agent pre-selected</div>
+          </div>
+        </div>
+        <div class="pipe-arrow"><svg viewBox="0 0 24 16"><path d="M4 8h16m-4-4l4 4-4 4" stroke="#58a6ff" stroke-width="2" fill="none" stroke-linecap="round"/></svg></div>
+        <div class="pipe-step" style="max-width:250px;">
+          <div class="pipe-box" style="border-left:3px solid var(--orange);border:1px dashed var(--orange);">
+            <div class="step-title">Triage LLM Call</div>
+            <div class="step-file">sessionConfig.ts</div>
+            <div class="step-detail">
+              "Given these agents:<br>
+              - researcher: Find papers<br>
+              - writer: Draft content<br>
+              Which fits this request?"<br>
+              → Returns agent name or "none"
+            </div>
+          </div>
+        </div>
+        <div class="pipe-arrow"><svg viewBox="0 0 24 16"><path d="M4 8h16m-4-4l4 4-4 4" stroke="#58a6ff" stroke-width="2" fill="none" stroke-linecap="round"/></svg></div>
+        <div class="pipe-step" style="max-width:220px;">
+          <div class="pipe-box" style="border-left:3px solid var(--purple)">
+            <div class="step-title">Session Rebuilt</div>
+            <div class="step-detail">
+              <code>triageAgentForSession = 'writer'</code><br>
+              <code>configDirty = true</code><br>
+              → ensureSession() creates new session<br>
+              with agent-specific config
+            </div>
+          </div>
+        </div>
+      </div>
+
+      <div style="font-size:12px;color:var(--text-dim);padding:10px 16px;background:var(--surface2);border-radius:8px;border-left:3px solid var(--pink);">
+        <strong>Handoffs</strong> work differently from triage. When an agent defines <code>handoffs: [{agent: 'writer', label: 'Draft it'}]</code>,
+        buttons appear after the response. Clicking one switches <code>selectedAgent</code>, sets <code>configDirty = true</code>,
+        and optionally auto-sends a prompt. The session is rebuilt with the new agent's config.
+      </div>
+
+      <div style="font-size:12px;color:var(--text-dim);padding:10px 16px;background:var(--surface2);border-radius:8px;border-left:3px solid var(--green);">
+        <strong>SDK-level delegation</strong>: All agents are always in <code>customAgents[]</code> regardless of selection.
+        The SDK can internally delegate to subagents (triggering <code>subagent.started</code> / <code>subagent.completed</code> events).
+        This is separate from triage/handoff — it's the LLM deciding to use another agent as a "tool".
+      </div>
+    </div>
+  </div>
+</div>
+
+<!-- ═══════════════════════════════════════════════════════════════ -->
+<!-- SECTION 9 — BACKGROUND / TRIGGER SESSIONS                     -->
+<!-- ═══════════════════════════════════════════════════════════════ -->
+<div class="section">
+  <div class="section-title">
+    <span class="section-num" style="background:var(--surface2);color:var(--teal);">9</span>
+    Background &amp; Trigger Sessions
+  </div>
+  <div class="flow" style="gap:18px; flex-wrap:wrap;">
+    <div style="flex:1;min-width:280px;">
+      <div class="card logic">
+        <div class="card-name">Session Switching (sidebar)</div>
+        <div class="card-file">sessionSidebar.ts</div>
+        <div class="card-desc">
+          When you switch sessions:<br>
+          1. Current session's DOM saved to <code>BackgroundSession.savedDom</code><br>
+          2. Events stay subscribed — streaming continues in background<br>
+          3. Target session's DOM restored or new session created<br>
+          4. <code>turnSkillsUsed</code>, <code>turnToolsUsed</code>, token accumulators preserved
+        </div>
+      </div>
+    </div>
+    <div style="flex:1;min-width:280px;">
+      <div class="card vault">
+        <div class="card-name">Trigger-Based Sessions</div>
+        <div class="card-file">triggersPanel.ts + triggerScheduler.ts</div>
+        <div class="card-desc">
+          <strong>Cron triggers</strong>: Polled every 60s, fires when schedule matches.<br>
+          <strong>Glob triggers</strong>: File change watcher, 5s debounce per trigger.<br>
+          Both create a background session with the trigger's agent + prompt.<br>
+          Uses same <code>buildSessionConfig()</code> pipeline — skills included.
+        </div>
+      </div>
+    </div>
+  </div>
+</div>
+
+<!-- ═══════════════════════════════════════════════════════════════ -->
+<!-- SECTION 10 — DEBUG CHECKLIST                                   -->
+<!-- ═══════════════════════════════════════════════════════════════ -->
+<div class="section">
+  <div class="section-title">
+    <span class="section-num" style="background:var(--surface2);color:var(--red);">10</span>
+    Debug Checklist — "Why isn't my skill triggering?"
+  </div>
+  <div style="background:var(--surface);border:1px solid var(--border);border-radius:var(--radius);padding:20px;">
+    <ol style="font-size:14px;line-height:2;padding-left:20px;">
+      <li>Enable debug mode in plugin settings → check console for <code>debugTrace('buildSessionConfig', ...)</code></li>
+      <li>Verify <code>enabledSkills</code> contains your skill name (logged in trace)</li>
+      <li>Verify <code>skillDirectories</code> is not empty (logged in trace)</li>
+      <li>Verify <code>skipSkills</code> is <code>false</code> (it's <code>true</code> when using <code>/prompt</code> templates)</li>
+      <li>Check the system message in the SDK request — does it list your skill in "Available skills"?</li>
+      <li>If using an agent, check the agent's <code>skills:</code> frontmatter — empty <code>[]</code> disables all skills</li>
+      <li>Watch for <code>debugTrace('skill.invoked', {name})</code> in console — if absent, the SDK chose not to invoke it</li>
+      <li>Check if the skill's <code>SKILL.md</code> has valid YAML frontmatter with <code>name</code> and <code>description</code></li>
+      <li>Ensure the skill folder is inside the configured <code>skills/</code> path (check Settings tab)</li>
+    </ol>
+  </div>
+</div>
+
+<div style="text-align:center;color:var(--text-dim);font-size:12px;margin-top:40px;padding-top:20px;border-top:1px solid var(--border);">
+  Generated from Obsidian Sidekick codebase audit — April 2026
+</div>
+
+</body>
+</html>

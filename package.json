@@ -1,12 +1,14 @@
 {
 	"name": "obsidian-sidekick",
-	"version": "1.2.5-jinle",
+	"version": "1.2.6-jinle",
 	"description": "Your Obsidian sidekick.",
 	"main": "main.js",
 	"type": "module",
 	"scripts": {
 		"dev": "node esbuild.config.mjs",
 		"build": "node esbuild.config.mjs production",
+		"test": "vitest run",
+		"test:watch": "vitest",
 		"type-check": "tsc -noEmit -skipLibCheck",
 		"deploy:local": "node --no-deprecation deploy-local.mjs",
 		"version": "node version-bump.mjs && git add manifest.json versions.json",
@@ -24,7 +26,8 @@
 		"tslib": "2.4.0",
 		"tsx": "^4.21.0",
 		"typescript": "^5.8.3",
-		"typescript-eslint": "8.35.1"
+		"typescript-eslint": "8.35.1",
+		"vitest": "^4.1.2"
 	},
 	"peerDependencies": {
 		"@codemirror/state": "^6",

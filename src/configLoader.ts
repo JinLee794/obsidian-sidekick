@@ -181,12 +181,14 @@ export async function loadAgents(app: App, agentsFolder: string): Promise<AgentC
 		const {meta, body, rawYaml} = parseFrontmatter(content);
 		const rawTools = meta['tools'];
 		const rawSkills = meta['skills'];
+		const rawExclude = meta['excludeTools'];
 		const handoffs = parseHandoffsBlock(rawYaml);
 		agents.push({
 			name: (typeof meta['name'] === 'string' ? meta['name'] : '') || child.basename.replace('.agent', ''),
 			description: (typeof meta['description'] === 'string' ? meta['description'] : '') || '',
 			model: (typeof meta['model'] === 'string' && meta['model']) || undefined,
 			tools: Array.isArray(rawTools) ? rawTools : (typeof rawTools === 'string' && rawTools ? rawTools.split(',').map(t => t.trim()).filter(Boolean) : ('tools' in meta ? [] : undefined)),
+			excludeTools: Array.isArray(rawExclude) ? rawExclude : (typeof rawExclude === 'string' && rawExclude ? rawExclude.split(',').map(t => t.trim()).filter(Boolean) : undefined),
 			skills: Array.isArray(rawSkills) ? rawSkills : (typeof rawSkills === 'string' && rawSkills ? rawSkills.split(',').map(s => s.trim()).filter(Boolean) : ('skills' in meta ? [] : undefined)),
 			handoffs,
 			instructions: body.trim(),

@@ -881,8 +881,8 @@ export class SidekickSettingTab extends PluginSettingTab {
 				}));
 
 		new Setting(capPanel)
-			.setName('Automatic agent triage')
-			.setDesc('When agent is set to Auto, route requests to the best-fit configured agent.')
+			.setName('Automatic agent routing')
+			.setDesc('Allow the SDK to automatically route requests to the best-fit agent when no agent is explicitly selected.')
 			.addToggle(toggle => toggle
 				.setValue(this.plugin.settings.agentTriage)
 				.onChange(async (value) => {

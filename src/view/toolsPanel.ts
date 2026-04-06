@@ -455,6 +455,16 @@ export function installToolsPanel(ViewClass: {prototype: unknown}): void {
 					}
 				}
 			}
+
+			// Excluded built-in tools section
+			if (agent.excludeTools && agent.excludeTools.length > 0) {
+				const excludeRow = details.createDiv({cls: 'sidekick-tools-agent-tools'});
+				excludeRow.createSpan({cls: 'sidekick-tools-tag sidekick-tools-tag-muted', text: 'Excluded:'});
+				for (const toolName of agent.excludeTools) {
+					const tag = excludeRow.createSpan({cls: 'sidekick-tools-tag sidekick-tools-tag-muted'});
+					tag.setText(toolName);
+				}
+			}
 		}
 	};
 
@@ -609,25 +619,11 @@ export function installToolsPanel(ViewClass: {prototype: unknown}): void {
 
 	proto.scheduleSdkToolDiscovery = function(initialDelay = 2000): void {
 		if (this.sdkToolDiscoveryTimer) clearTimeout(this.sdkToolDiscoveryTimer);
-		const attempt = (delay: number, retriesLeft: number) => {
-			this.sdkToolDiscoveryTimer = setTimeout(async () => {
-				await this.discoverToolsViaSdk();
-				// Check if proxy servers still have no tools — retry if so
-				if (retriesLeft > 0) {
-					const proxyServers = this.mcpServers.filter(
-						s => this.enabledMcpServers.has(s.name) && isProxyOnlyServer(s)
-					);
-					const anyMissing = proxyServers.some(s => {
-						const status = this.mcpServerStatus.get(s.name);
-						return !status?.tools || status.tools.length === 0;
-					});
-					if (anyMissing) {
-						attempt(5000, retriesLeft - 1);
-					}
-				}
-			}, delay);
-		};
-		attempt(initialDelay, 2);
+		// Single delayed discovery call — relies on session events for re-triggers
+		// rather than a polling loop. handleMcpSessionEvent calls this again on connect.
+		this.sdkToolDiscoveryTimer = setTimeout(async () => {
+			await this.discoverToolsViaSdk();
+		}, initialDelay);
 	};
 
 	proto.trackDiscoveredTool = function(serverName: string, toolName: string): void {

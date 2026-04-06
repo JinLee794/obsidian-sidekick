@@ -356,6 +356,14 @@ export class TelegramBotService {
 		if (this.globalInstructions) systemParts.push(this.globalInstructions);
 		const systemContent = systemParts.length > 0 ? systemParts.join('\n\n') : undefined;
 
+		// Exclude shell tools (no interactive shell in bot sessions) + agent-level exclusions
+		const excludedTools: string[] = ['bash', 'read_bash', 'write_bash', 'list_bash', 'stop_bash'];
+		if (agent?.excludeTools) {
+			for (const t of agent.excludeTools) {
+				if (!excludedTools.includes(t)) excludedTools.push(t);
+			}
+		}
+
 		return {
 			model: (provider && this.plugin.settings.providerModel) ? this.plugin.settings.providerModel : model,
 			streaming: providerPreset !== 'foundry-local',
@@ -367,6 +375,7 @@ export class TelegramBotService {
 			...(customAgents.length > 0 ? {customAgents} : {}),
 			...(skillDirs.length > 0 ? {skillDirectories: skillDirs} : {}),
 			...(disabledSkills.length > 0 ? {disabledSkills} : {}),
+			...(excludedTools.length > 0 ? {excludedTools} : {}),
 			...(systemContent ? {systemMessage: {mode: 'append' as const, content: systemContent}} : {}),
 		};
 	}

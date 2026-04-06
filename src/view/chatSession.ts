@@ -25,6 +25,9 @@ export function installChatSession(ViewClass: {prototype: unknown}): void {
 			block.createDiv({cls: 'sidekick-subagent-desc', text: description});
 		}
 
+		// Placeholder for current task — updated by tool.execution_start
+		block.createDiv({cls: 'sidekick-subagent-current-task'});
+
 		// Collapsible activity section — tool calls from this sub-agent render here
 		const activityDetails = block.createEl('details', {cls: 'sidekick-subagent-activity-wrapper'});
 		const activitySummary = activityDetails.createEl('summary', {cls: 'sidekick-subagent-activity-summary'});
@@ -175,10 +178,8 @@ export function installChatSession(ViewClass: {prototype: unknown}): void {
 		const skipSkills = !!usedPrompt;
 
 		// Prepend prompt template content if active.
-		// Include an explicit instruction to not invoke skills so the model
-		// follows the prompt template even on sessions that already have skills.
 		const sendPrompt = usedPrompt
-			? `${usedPrompt.content}\n\nDo not invoke any skills for this request. Respond directly based on the instructions above.\n\n${prompt}`
+			? `${usedPrompt.content}\n\n${prompt}`
 			: prompt;
 
 		this.activePrompt = null;
@@ -198,18 +199,6 @@ export function installChatSession(ViewClass: {prototype: unknown}): void {
 		this.updateSendButton();
 		this.renderSessionList();  // Show green active dot
 		this.addAssistantPlaceholder();
-
-		// Agent triage (async) — runs after UI is already updated
-		if (this.plugin.settings.agentTriage && !this.selectedAgent && this.agents.length > 1) {
-			if (!this.triageAgentForSession) {
-				const routed = await this.triageRequest(sendPrompt);
-				if (routed) {
-					this.triageAgentForSession = routed;
-					this.configDirty = true;
-					this.addInfoMessage(`Routed to **${routed}**.`);
-				}
-			}
-		}
 
 		try {
 			await this.ensureSession({skipSkills});
@@ -309,15 +298,6 @@ export function installChatSession(ViewClass: {prototype: unknown}): void {
 	proto.ensureSession = async function(opts?: {skipSkills?: boolean}): Promise<void> {
 		if (this.currentSession && !this.configDirty) return;
 
-		// Tear down existing session
-		if (this.currentSession) {
-			this.unsubscribeEvents();
-			try {
-				await this.currentSession.disconnect();
-			} catch { /* ignore */ }
-			this.currentSession = null;
-		}
-
 		const effectiveAgentName = this.selectedAgent || this.triageAgentForSession || '';
 		const agent = this.agents.find(a => a.name === effectiveAgentName);
 
@@ -329,6 +309,33 @@ export function installChatSession(ViewClass: {prototype: unknown}): void {
 			selectedAgentName: effectiveAgentName || undefined,
 			skipSkills: opts?.skipSkills,
 		});
+
+		if (this.currentSession && this.currentSessionId && this.configDirty) {
+			// Resume existing session with updated config instead of full teardown.
+			// This preserves conversation context and avoids a new session roundtrip.
+			try {
+				this.unsubscribeEvents();
+				this.currentSession = await this.plugin.copilot!.resumeSession(
+					this.currentSessionId,
+					sessionConfig,
+				);
+				this.configDirty = false;
+				this.registerSessionEvents();
+				this.updateToolbarLock();
+				return;
+			} catch {
+				// Resume failed (e.g. session expired) — fall through to create new
+				debugTrace('resumeSession failed, creating new session');
+				this.currentSession = null;
+			}
+		}
+
+		// No existing session — create fresh
+		if (this.currentSession) {
+			this.unsubscribeEvents();
+			try { await this.currentSession.disconnect(); } catch { /* ignore */ }
+			this.currentSession = null;
+		}
 
 		this.currentSession = await this.plugin.copilot!.createSession(sessionConfig);
 		this.currentSessionId = this.currentSession.sessionId;
@@ -416,7 +423,7 @@ export function installChatSession(ViewClass: {prototype: unknown}): void {
 					this.trackDiscoveredTool(mcpServer, event.data.toolName);
 				}
 				this.addToolCallBlock(event.data.toolCallId, event.data.toolName, event.data.arguments, parentId);
-				// Update sub-agent activity count
+				// Update sub-agent activity count and current task label
 				if (parentId) {
 					const subBlock = this.activeSubagentBlocks.get(parentId);
 					if (subBlock) {
@@ -425,6 +432,23 @@ export function installChatSession(ViewClass: {prototype: unknown}): void {
 							const count = parseInt(badge.getAttribute('data-count') || '0', 10) + 1;
 							badge.setAttribute('data-count', String(count));
 							badge.textContent = String(count);
+						}
+						// Surface current task in subagent header
+						const taskEl = subBlock.querySelector('.sidekick-subagent-current-task') as HTMLElement | null;
+						if (taskEl) {
+							const args = event.data.arguments as Record<string, unknown> | undefined;
+							const taskSummary =
+								(args?.explanation as string | undefined) ||
+								(args?.goal as string | undefined) ||
+								(args?.description as string | undefined) ||
+								(args?.query as string | undefined) ||
+								(args?.command ? `${event.data.toolName}: ${String(args.command).slice(0, 80)}` : null) ||
+								event.data.toolName;
+							const maxLen = 100;
+							taskEl.textContent = taskSummary.length > maxLen
+								? taskSummary.slice(0, maxLen) + '…'
+								: taskSummary;
+							taskEl.classList.add('is-active');
 						}
 					}
 				}
@@ -442,6 +466,7 @@ export function installChatSession(ViewClass: {prototype: unknown}): void {
 				);
 			}),
 			session.on('skill.invoked', (event) => {
+				debugTrace('skill.invoked', {name: event.data.name});
 				this.turnSkillsUsed.push(event.data.name);
 			}),
 			session.on('subagent.started', (event) => {
@@ -481,6 +506,10 @@ export function installChatSession(ViewClass: {prototype: unknown}): void {
 					agentDisplayName: event.data.agentDisplayName,
 					tools: event.data.tools,
 				});
+				// SDK has routed to this agent — update UI label
+				if (event.data.agentName && !this.selectedAgent) {
+					this.triageAgentForSession = event.data.agentName;
+				}
 			}),
 			session.on('subagent.deselected', () => {
 				debugTrace('subagent.deselected', {});

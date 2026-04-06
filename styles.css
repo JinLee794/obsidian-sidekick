@@ -1457,6 +1457,19 @@
 	margin-top: 2px;
 }
 
+.sidekick-subagent-current-task {
+	font-size: var(--font-ui-smaller);
+	color: var(--text-accent);
+	margin-top: 4px;
+	overflow: hidden;
+	text-overflow: ellipsis;
+	white-space: nowrap;
+}
+
+.sidekick-subagent-current-task:empty {
+	display: none;
+}
+
 .sidekick-subagent-error {
 	color: var(--text-error);
 	font-size: var(--font-ui-smaller);

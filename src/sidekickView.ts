@@ -33,6 +33,7 @@ import {VaultIndex} from './vaultIndex';
 import {ContextBuilder} from './contextBuilder';
 import {VaultScopeModal} from './modals/vaultScopeModal';
 import {EditModal} from './modals/editModal';
+import {registerBackgroundEvents as registerBgEvents} from './view/bgEvents';
 import {ToolApprovalModal} from './modals/toolApprovalModal';
 import {FolderTreeModal} from './modals/folderTreeModal';
 import {McpEditorModal} from './modals/mcpEditorModal';
@@ -1924,95 +1925,18 @@ export class SidekickView extends ItemView {
 	 * object while the session is not being viewed.
 	 */
 	registerBackgroundEvents(bg: BackgroundSession): void {
-		const session = bg.session;
-
-		bg.unsubscribers.push(
-			session.on('assistant.turn_start', () => {
-				if (bg.turnStartTime === 0) bg.turnStartTime = Date.now();
-			}),
-			session.on('assistant.message_delta', (event) => {
-				bg.streamingContent += event.data.deltaContent;
-				// No DOM rendering — session is hidden
-			}),
-			session.on('assistant.message', () => { /* accumulated via deltas */ }),
-			session.on('assistant.usage', (event) => {
-				const d = event.data;
-				if (!bg.turnUsage) {
-					bg.turnUsage = {
-						inputTokens: d.inputTokens ?? 0,
-						outputTokens: d.outputTokens ?? 0,
-						cacheReadTokens: d.cacheReadTokens ?? 0,
-						cacheWriteTokens: d.cacheWriteTokens ?? 0,
-						model: d.model,
-					};
-				} else {
-					bg.turnUsage.inputTokens += d.inputTokens ?? 0;
-					bg.turnUsage.outputTokens += d.outputTokens ?? 0;
-					bg.turnUsage.cacheReadTokens += d.cacheReadTokens ?? 0;
-					bg.turnUsage.cacheWriteTokens += d.cacheWriteTokens ?? 0;
-					if (d.model) bg.turnUsage.model = d.model;
-				}
-			}),
-			session.on('session.idle', () => {
-				// Finalize the background streaming turn
-				if (bg.streamingContent) {
-					bg.messages.push({
-						id: `a-${Date.now()}`,
-						role: 'assistant',
-						content: bg.streamingContent,
-						timestamp: Date.now(),
-					});
-				}
-				bg.streamingContent = '';
-				bg.streamingBodyEl = null;
-				bg.streamingWrapperEl = null;
-				bg.toolCallsContainer = null;
-				bg.activeToolCalls.clear();
-				bg.streamingComponent = null;
-				bg.turnStartTime = 0;
-				bg.turnToolsUsed = [];
-				bg.turnSkillsUsed = [];
-				bg.turnUsage = null;
-				bg.isStreaming = false;
-				// Re-render sidebar to remove the green dot
+		registerBgEvents(bg.session, bg, {
+			onSessionFinished: () => {
 				this.renderSessionList();
 				void this.loadSessions();
-			}),
-			session.on('session.error', (event) => {
-				bg.messages.push({
-					id: `i-${Date.now()}`,
-					role: 'info',
-					content: `Error: ${event.data.message}`,
-					timestamp: Date.now(),
-				});
-				bg.isStreaming = false;
-				bg.streamingContent = '';
-				bg.streamingBodyEl = null;
-				bg.streamingWrapperEl = null;
-				bg.toolCallsContainer = null;
-				bg.activeToolCalls.clear();
-				bg.streamingComponent = null;
-				this.renderSessionList();
-			}),
-			session.on('tool.execution_start', (event) => {
-				bg.turnToolsUsed.push(event.data.toolName);
-				const mcpServer = (event.data as {mcpServerName?: string}).mcpServerName;
-				if (mcpServer) this.trackDiscoveredTool(mcpServer, event.data.toolName);
-				// No DOM manipulation — hidden session
-			}),
-			session.on('tool.execution_complete', () => {
-				// No DOM manipulation — hidden session
-			}),
-			session.on('skill.invoked', (event) => {
-				bg.turnSkillsUsed.push(event.data.name);
-			}),
-			session.on('session.info', (event) => {
-				this.handleMcpSessionEvent(event.data.infoType, event.data.message, 'info');
-			}),
-			session.on('session.warning', (event) => {
-				this.handleMcpSessionEvent(event.data.warningType, event.data.message, 'warning');
-			}),
-		);
+			},
+			onToolDiscovered: (mcpServer, toolName) => {
+				this.trackDiscoveredTool(mcpServer, toolName);
+			},
+			onSessionEvent: (type, message, level) => {
+				this.handleMcpSessionEvent(type, message, level);
+			},
+		});
 	}
 
 	/**

@@ -5,6 +5,7 @@ import type {ChatMessage} from '../types';
 import {debugTrace} from '../debug';
 import {formatTimeAgo} from './utils';
 import type {BackgroundSession} from './types';
+import {registerBackgroundEvents as registerBgEvents} from './bgEvents';
 
 declare module '../sidekickView' {
 	interface SidekickView {
@@ -522,93 +523,15 @@ export function installSessionSidebar(ViewClass: {prototype: unknown}): void {
 	};
 
 	proto.registerBackgroundEvents = function (bg: BackgroundSession): void {
-		const session = bg.session;
-
-		bg.unsubscribers.push(
-			session.on('assistant.turn_start', () => {
-				if (bg.turnStartTime === 0) bg.turnStartTime = Date.now();
-			}),
-			session.on('assistant.message_delta', (event) => {
-				bg.streamingContent += event.data.deltaContent;
-				// No DOM rendering — session is hidden
-			}),
-			session.on('assistant.message', () => { /* accumulated via deltas */ }),
-			session.on('assistant.usage', (event) => {
-				const d = event.data;
-				if (!bg.turnUsage) {
-					bg.turnUsage = {
-						inputTokens: d.inputTokens ?? 0,
-						outputTokens: d.outputTokens ?? 0,
-						cacheReadTokens: d.cacheReadTokens ?? 0,
-						cacheWriteTokens: d.cacheWriteTokens ?? 0,
-						model: d.model,
-					};
-				} else {
-					bg.turnUsage.inputTokens += d.inputTokens ?? 0;
-					bg.turnUsage.outputTokens += d.outputTokens ?? 0;
-					bg.turnUsage.cacheReadTokens += d.cacheReadTokens ?? 0;
-					bg.turnUsage.cacheWriteTokens += d.cacheWriteTokens ?? 0;
-					if (d.model) bg.turnUsage.model = d.model;
-				}
-			}),
-			session.on('session.idle', () => {
-				// Finalize the background streaming turn
-				if (bg.streamingContent) {
-					bg.messages.push({
-						id: `a-${Date.now()}`,
-						role: 'assistant',
-						content: bg.streamingContent,
-						timestamp: Date.now(),
-					});
-				}
-				bg.streamingContent = '';
-				bg.streamingBodyEl = null;
-				bg.streamingWrapperEl = null;
-				bg.toolCallsContainer = null;
-				bg.activeToolCalls.clear();
-				if (bg.streamingComponent) {
-					try { this.removeChild(bg.streamingComponent); } catch { /* ignore */ }
-				}
-				bg.streamingComponent = null;
-				bg.turnStartTime = 0;
-				bg.turnToolsUsed = [];
-				bg.turnSkillsUsed = [];
-				bg.turnUsage = null;
-				bg.isStreaming = false;
-				// Re-render sidebar to remove the green dot
+		registerBgEvents(bg.session, bg, {
+			onSessionFinished: () => {
 				this.renderSessionList();
 				void this.loadSessions();
-			}),
-			session.on('session.error', (event) => {
-				bg.messages.push({
-					id: `i-${Date.now()}`,
-					role: 'info',
-					content: `Error: ${event.data.message}`,
-					timestamp: Date.now(),
-				});
-				bg.isStreaming = false;
-				bg.streamingContent = '';
-				bg.streamingBodyEl = null;
-				bg.streamingWrapperEl = null;
-				bg.toolCallsContainer = null;
-				bg.activeToolCalls.clear();
-				if (bg.streamingComponent) {
-					try { this.removeChild(bg.streamingComponent); } catch { /* ignore */ }
-				}
-				bg.streamingComponent = null;
-				this.renderSessionList();
-			}),
-			session.on('tool.execution_start', (event) => {
-				bg.turnToolsUsed.push(event.data.toolName);
-				// No DOM manipulation — hidden session
-			}),
-			session.on('tool.execution_complete', () => {
-				// No DOM manipulation — hidden session
-			}),
-			session.on('skill.invoked', (event) => {
-				bg.turnSkillsUsed.push(event.data.name);
-			}),
-		);
+			},
+			removeChild: (component) => {
+				try { this.removeChild(component as import('obsidian').Component); } catch { /* ignore */ }
+			},
+		});
 	};
 
 	proto.restoreAgentFromSessionName = function (sessionId: string): void {
