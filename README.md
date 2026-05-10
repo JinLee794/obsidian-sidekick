@@ -1,3 +1,10 @@
+# ⚠️ DEPRECATED
+
+> **This repository is deprecated and no longer maintained.**
+> Please use the successor project: **[obsidian-sidekick-plus](https://github.com/JinLee794/obsidian-sidekick-plus)**
+
+---
+
 # Sidekick
 
 ![Obsidian Sidekick](./docs/images/banner.png)
