@@ -593,7 +593,8 @@ function buildImageMenu(menu: Menu, plugin: SidekickPlugin, file: TFile): void {
 /** Get the absolute OS path for a vault file. */
 function getAbsolutePath(plugin: SidekickPlugin, file: TFile): string {
 	const basePath = (plugin.app.vault.adapter as unknown as {basePath: string}).basePath;
-	return basePath + '/' + file.path;
+	const pathMod = (window as unknown as {require?: NodeRequire}).require?.('node:path') as typeof import('node:path') | undefined;
+	return pathMod ? pathMod.join(basePath, file.path) : `${basePath}/${file.path}`;
 }
 
 /** Extract content from an image by sending it to the LLM. */

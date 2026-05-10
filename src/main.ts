@@ -99,9 +99,12 @@ export default class SidekickPlugin extends Plugin {
 			}
 			// Compute the actual plugin directory so the binary resolver avoids
 			// __dirname, which points to Electron's renderer inside electron.asar.
-			const pluginDir = this.app.vault.adapter instanceof FileSystemAdapter
-				? `${this.app.vault.adapter.getBasePath()}/${this.manifest.dir}`
-				: '';
+			let pluginDir = '';
+			if (this.app.vault.adapter instanceof FileSystemAdapter && this.manifest.dir) {
+				const pathMod = (window as unknown as {require?: NodeRequire}).require?.('node:path') as typeof import('node:path') | undefined;
+				const base = this.app.vault.adapter.getBasePath();
+				pluginDir = pathMod ? pathMod.join(base, this.manifest.dir) : `${base}/${this.manifest.dir}`;
+			}
 			this.copilot = new CopilotService({
 				cliPath: loc.length > 0 ? loc : undefined,
 				pluginDir,

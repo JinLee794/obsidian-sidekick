@@ -6,6 +6,7 @@ import {McpEditorModal} from '../modals/mcpEditorModal';
 import {AgencyConfigModal} from '../modals/agencyConfigModal';
 import {debugTrace} from '../debug';
 import {probeAllMcpServers, isProxyOnlyServer, isAgencyAvailable, isAgencyService, resetAgencyCache, enrichServersWithAzureAuth, needsAzureAuth, clearAzureTokenCache} from '../mcpProbe';
+import {buildSpawnEnv, EXE_SUFFIX, IS_WINDOWS} from '../platformEnv';
 
 /** Name for the built-in Obsidian Intelligence Layer MCP server. */
 export const OIL_SERVER_NAME = 'oil';
@@ -924,16 +925,11 @@ export function installToolsPanel(ViewClass: {prototype: unknown}): void {
 
 		new Notice(`Refreshing auth for ${serverName}…`);
 
-		// Build a PATH that includes common binary directories
-		const home = process.env['HOME'] || '';
-		const extraDirs = ['/usr/local/bin', '/opt/homebrew/bin'];
-		if (home) extraDirs.push(`${home}/.local/bin`);
-		const searchPath = [...extraDirs, process.env['PATH'] || ''].join(':');
-
 		try {
 			const {stdout, stderr} = await execFileAsync(auth.command, auth.args ?? [], {
 				timeout: 60_000,
-				env: {...process.env, PATH: searchPath},
+				env: buildSpawnEnv(),
+				shell: IS_WINDOWS,
 			});
 
 			const output = stdout.trim();
@@ -1005,17 +1001,13 @@ export function installToolsPanel(ViewClass: {prototype: unknown}): void {
 		}
 		const execFileAsync = util.promisify(cp.execFile);
 
-		const home = process.env['HOME'] || '';
-		const extraDirs = ['/usr/local/bin', '/opt/homebrew/bin'];
-		if (home) extraDirs.push(`${home}/.local/bin`);
-		const searchPath = [...extraDirs, process.env['PATH'] || ''].join(':');
-
 		new Notice('Azure auth required — launching az login…');
 
 		try {
-			await execFileAsync('az', ['login', '--only-show-errors'], {
+			await execFileAsync(`az${EXE_SUFFIX}`, ['login', '--only-show-errors'], {
 				timeout: 120_000,
-				env: {...process.env, PATH: searchPath},
+				env: buildSpawnEnv(),
+				shell: IS_WINDOWS,
 			});
 
 			new Notice('Azure login succeeded — refreshing token…');

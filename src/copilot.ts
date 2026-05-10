@@ -21,6 +21,7 @@ import type {
 	Tool,
 } from '@github/copilot-sdk';
 import type {ProviderConfig, UserInputHandler, UserInputRequest, UserInputResponse, ReasoningEffort} from '@github/copilot-sdk/dist/types';
+import {buildSpawnEnv, EXE_SUFFIX, IS_WINDOWS, PATH_SEP, getDefaultBinDirs} from './platformEnv';
 
 // Available at runtime in the esbuild CJS bundle.
 const nodeRequire = typeof globalThis.require === 'function' ? globalThis.require : undefined;
@@ -40,16 +41,12 @@ declare const process: {
 export async function resolveGhToken(): Promise<string | undefined> {
 	const {execFile} = nodeRequire?.('node:child_process') as typeof import('node:child_process') ?? await import('node:child_process');
 	const {promisify} = nodeRequire?.('node:util') as typeof import('node:util') ?? await import('node:util');
-	const home = process.env['HOME'] || '';
-	// Build a PATH that includes common binary directories
-	const extraDirs = ['/usr/local/bin', '/opt/homebrew/bin'];
-	if (home) extraDirs.push(`${home}/.local/bin`);
-	const searchPath = [...extraDirs, process.env['PATH'] || ''].join(':');
 	const execFileAsync = promisify(execFile);
 	try {
-		const {stdout} = await execFileAsync('gh', ['auth', 'token'], {
+		const {stdout} = await execFileAsync(`gh${EXE_SUFFIX}`, ['auth', 'token'], {
 			timeout: 5000,
-			env: {...process.env, PATH: searchPath},
+			env: buildSpawnEnv(),
+			shell: IS_WINDOWS,
 		});
 		const token = stdout.trim();
 		return token.length > 0 ? token : undefined;
@@ -129,25 +126,15 @@ function cleanEnv(): Record<string, string> {
 		}
 	}
 
-	// Electron apps launched from Finder on macOS inherit a minimal PATH
-	// (e.g. /usr/bin:/bin:/usr/sbin:/sbin). Augment it so the Copilot CLI
-	// subprocess can find `gh` and other tools needed for authentication.
-	if (process.platform !== 'win32') {
-		const home = env['HOME'] || '';
-		const extraDirs = [
-			'/usr/local/bin',
-			'/opt/homebrew/bin',
-			'/opt/homebrew/sbin',
-			home ? `${home}/.local/bin` : '',
-			home ? `${home}/.nvm/current/bin` : '',
-			'/usr/local/sbin',
-		].filter(Boolean);
-		const currentPath = env['PATH'] || '';
-		const existingDirs = new Set(currentPath.split(':'));
-		const missing = extraDirs.filter(d => !existingDirs.has(d));
-		if (missing.length > 0) {
-			env['PATH'] = [...missing, currentPath].join(':');
-		}
+	// GUI-launched Electron apps inherit only a minimal PATH (especially on
+	// macOS where Finder-launched apps see /usr/bin:/bin:/usr/sbin:/sbin).
+	// Augment it so the Copilot CLI subprocess can find `gh`, `az`, etc.
+	const extraDirs = getDefaultBinDirs();
+	const currentPath = env['PATH'] || env['Path'] || '';
+	const existingDirs = new Set(currentPath.split(PATH_SEP));
+	const missing = extraDirs.filter(d => !existingDirs.has(d));
+	if (missing.length > 0) {
+		env['PATH'] = [...missing, currentPath].filter(Boolean).join(PATH_SEP);
 	}
 
 	return env;

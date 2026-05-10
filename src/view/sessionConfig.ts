@@ -12,6 +12,17 @@ import {isProxyOnlyServer, isAgencyAvailable, rewriteForAgency} from '../mcpProb
 import {debugTrace} from '../debug';
 
 /**
+ * Join an absolute OS base path with a vault-relative path using the platform
+ * separator. Falls back to forward-slash concatenation when `node:path` is
+ * unavailable (e.g. on Obsidian Mobile).
+ */
+function joinOsPath(base: string, rel: string): string {
+	if (!rel) return base;
+	const pathMod = (typeof window !== 'undefined' ? (window as unknown as {require?: NodeRequire}).require : undefined)?.('node:path') as typeof import('node:path') | undefined;
+	return pathMod ? pathMod.join(base, rel) : `${base}/${rel}`;
+}
+
+/**
  * Map MCP server entries to MCPServerConfig objects, filtering by enabled set.
  *
  * Proxy-only servers (e.g. agent365 M365 servers) are normally excluded — they
@@ -144,7 +155,7 @@ export function buildSdkAttachments(params: {
 
 	for (const att of attachments) {
 		if ((att.type === 'file' || att.type === 'image') && att.path) {
-			const filePath = att.absolutePath ? att.path : vaultBasePath + '/' + normalizePath(att.path);
+			const filePath = att.absolutePath ? att.path : joinOsPath(vaultBasePath, normalizePath(att.path));
 			result.push({
 				type: 'file',
 				path: filePath,
@@ -155,14 +166,14 @@ export function buildSdkAttachments(params: {
 			// server's session.send handler maps all attachments to {type, path, displayName},
 			// reading .path (not .filePath) and dropping text/selection fields.
 			// The selection text is inlined in the prompt by buildPrompt().
-			const resolvedPath = att.absolutePath ? att.path : vaultBasePath + '/' + normalizePath(att.path);
+			const resolvedPath = att.absolutePath ? att.path : joinOsPath(vaultBasePath, normalizePath(att.path));
 			result.push({
 				type: 'file',
 				path: resolvedPath,
 				displayName: att.name,
 			});
 		} else if (att.type === 'directory' && att.path) {
-			const dirPath = att.absolutePath ? att.path : vaultBasePath + '/' + normalizePath(att.path);
+			const dirPath = att.absolutePath ? att.path : joinOsPath(vaultBasePath, normalizePath(att.path));
 			result.push({
 				type: 'directory',
 				path: dirPath,
@@ -185,7 +196,7 @@ export function buildSdkAttachments(params: {
 
 		const absPath = scopePath === '/'
 			? vaultBasePath
-			: vaultBasePath + '/' + normalized;
+			: joinOsPath(vaultBasePath, normalized);
 		const displayName = scopePath === '/' ? app.vault.getName() : scopePath;
 		const abstract = scopePath === '/'
 			? app.vault.getRoot()
@@ -304,7 +315,7 @@ export function installSessionConfigMixin(ViewClass: {prototype: unknown}): void
 		const skillDirs: string[] = [];
 		let disabledSkills: string[] = [];
 		if (!opts.skipSkills && this.skills.length > 0) {
-			skillDirs.push([basePath, getSkillsFolder(this.plugin.settings)].join('/'));
+			skillDirs.push(joinOsPath(basePath, getSkillsFolder(this.plugin.settings)));
 			disabledSkills = this.skills
 				.filter(s => !this.enabledSkills.has(s.name))
 				.map(s => s.name);
@@ -416,7 +427,7 @@ export function installSessionConfigMixin(ViewClass: {prototype: unknown}): void
 
 		const skillDirs: string[] = [];
 		if (this.skills.length > 0) {
-			skillDirs.push([basePath, getSkillsFolder(this.plugin.settings)].join('/'));
+			skillDirs.push(joinOsPath(basePath, getSkillsFolder(this.plugin.settings)));
 		}
 		const disabledSkills = this.skills
 			.filter(s => !this.enabledSkills.has(s.name))
@@ -435,7 +446,7 @@ export function installSessionConfigMixin(ViewClass: {prototype: unknown}): void
 	proto.getWorkingDirectory = function(): string {
 		const base = this.getVaultBasePath();
 		if (!this.workingDir) return base;
-		return base + '/' + normalizePath(this.workingDir);
+		return joinOsPath(base, normalizePath(this.workingDir));
 	};
 
 	proto.getAgentsFolder = function(): string {

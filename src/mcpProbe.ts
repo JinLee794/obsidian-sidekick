@@ -7,12 +7,9 @@
  */
 
 import type {McpServerEntry, McpToolInfo} from './types';
+import {buildSearchPath, buildSpawnEnv, EXE_SUFFIX, IS_WINDOWS, PATH_SEP, getHomeDir} from './platformEnv';
 
 const nodeRequire = typeof globalThis.require === 'function' ? globalThis.require : undefined;
-declare const process: {
-	platform: string;
-	env: Record<string, string | undefined>;
-};
 
 /** Result of probing an MCP server. */
 export interface McpProbeResult {
@@ -62,13 +59,16 @@ let agencyPath: string | null = null;
 
 /** Build the PATH that includes the agency CLI install directory and common bin dirs. */
 function buildAgencySearchPath(): string {
-	const home = typeof process !== 'undefined' ? process.env['HOME'] || '' : '';
-	const extraDirs = ['/usr/local/bin', '/opt/homebrew/bin'];
+	const home = getHomeDir();
+	const extraDirs: string[] = [];
 	if (home) {
-		extraDirs.push(`${home}/.local/bin`);
-		extraDirs.push(`${home}/.config/agency/CurrentVersion`);
+		if (IS_WINDOWS) {
+			extraDirs.push(`${home}\\.config\\agency\\CurrentVersion`);
+		} else {
+			extraDirs.push(`${home}/.config/agency/CurrentVersion`);
+		}
 	}
-	return [...extraDirs, (typeof process !== 'undefined' ? process.env['PATH'] : '') || ''].join(':');
+	return buildSearchPath(extraDirs);
 }
 
 export function isAgencyAvailable(): boolean {
@@ -103,10 +103,13 @@ export async function primeAgencyCache(): Promise<void> {
 
 	// 1. Locate the binary (blocking fs.accessSync is < 1ms per dir — not a problem)
 	const searchPath = buildAgencySearchPath();
+	const pathModule = nodeRequire?.('node:path') as typeof import('node:path') | undefined;
+	const joinPath = pathModule?.join ?? ((a: string, b: string) => `${a}${IS_WINDOWS ? '\\' : '/'}${b}`);
+	const agencyExe = `agency${EXE_SUFFIX}`;
 	let resolved = '';
-	for (const dir of searchPath.split(':')) {
+	for (const dir of searchPath.split(PATH_SEP)) {
 		if (!dir) continue;
-		const candidate = `${dir}/agency`;
+		const candidate = joinPath(dir, agencyExe);
 		try { fs.accessSync(candidate, fs.constants.X_OK); resolved = candidate; break; } catch { /* skip */ }
 	}
 	if (!resolved) { agencyCached = false; agencyServicesCache = []; return; }
@@ -310,18 +313,13 @@ export async function getAzureToken(resource: string): Promise<string | undefine
 
 	const execFileAsync = util.promisify(cp.execFile);
 
-	const home = process.env['HOME'] || '';
-	const extraDirs = ['/usr/local/bin', '/opt/homebrew/bin'];
-	if (home) extraDirs.push(`${home}/.local/bin`);
-	const searchPath = [...extraDirs, process.env['PATH'] || ''].join(':');
-
 	try {
-		const {stdout} = await execFileAsync('az', [
+		const {stdout} = await execFileAsync(`az${EXE_SUFFIX}`, [
 			'account', 'get-access-token',
 			'--resource', resource,
 			'--query', 'accessToken',
 			'-o', 'tsv',
-		], {timeout: 15_000, env: {...process.env, PATH: searchPath}});
+		], {timeout: 15_000, env: buildSpawnEnv(), shell: IS_WINDOWS});
 
 		const token = stdout.trim();
 		if (!token) return undefined;
@@ -403,10 +401,7 @@ async function probeStdioServer(server: McpServerEntry): Promise<McpProbeResult>
 	const cp = nodeRequire?.('node:child_process') as typeof import('node:child_process') | undefined;
 	if (!cp) return {serverName: server.name, tools: [], error: 'child_process not available'};
 
-	const home = process.env['HOME'] || '';
-	const extraDirs = ['/usr/local/bin', '/opt/homebrew/bin'];
-	if (home) extraDirs.push(`${home}/.local/bin`);
-	const searchPath = [...extraDirs, process.env['PATH'] || ''].join(':');
+	const spawnEnv = buildSpawnEnv();
 
 	return new Promise<McpProbeResult>((resolve) => {
 		const timeout = 15_000;
@@ -415,8 +410,11 @@ async function probeStdioServer(server: McpServerEntry): Promise<McpProbeResult>
 
 		const child = cp.spawn(command, args, {
 			stdio: ['pipe', 'pipe', 'pipe'],
-			env: {...process.env, ...env, PATH: searchPath},
+			// Spread server-provided env first, then re-apply our augmented PATH
+			// so the binary can always be found.
+			env: {...spawnEnv, ...env, PATH: spawnEnv['PATH']},
 			...(cwd ? {cwd} : {}),
+			...(IS_WINDOWS ? {shell: true} : {}),
 		});
 
 		const timer = setTimeout(() => {
