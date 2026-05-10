@@ -45,11 +45,14 @@ export function getDefaultBinDirs(): string[] {
 	if (IS_WINDOWS) {
 		const dirs: string[] = [];
 		const localAppData = process.env['LOCALAPPDATA'];
+		const appData = process.env['APPDATA'];
 		const programFiles = process.env['ProgramFiles'] || process.env['PROGRAMFILES'];
 		const programFilesX86 = process.env['ProgramFiles(x86)'] || process.env['PROGRAMFILES(X86)'];
 		if (localAppData) {
 			dirs.push(`${localAppData}\\Programs\\GitHub CLI`);
 			dirs.push(`${localAppData}\\Microsoft\\WindowsApps`);
+			dirs.push(`${localAppData}\\Microsoft\\WinGet\\Links`);
+			dirs.push(`${localAppData}\\GitHub CLI`);
 		}
 		if (programFiles) {
 			dirs.push(`${programFiles}\\GitHub CLI`);
@@ -58,6 +61,13 @@ export function getDefaultBinDirs(): string[] {
 		if (programFilesX86) {
 			dirs.push(`${programFilesX86}\\Microsoft SDKs\\Azure\\CLI2\\wbin`);
 		}
+		// Scoop installs shims here
+		if (home) dirs.push(`${home}\\scoop\\shims`);
+		// Chocolatey installs here
+		const chocoInstall = process.env['ChocolateyInstall'];
+		if (chocoInstall) dirs.push(`${chocoInstall}\\bin`);
+		// npm global installs on Windows
+		if (appData) dirs.push(`${appData}\\npm`);
 		if (home) {
 			dirs.push(`${home}\\.local\\bin`);
 		}

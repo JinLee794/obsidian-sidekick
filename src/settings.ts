@@ -618,6 +618,35 @@ export class SidekickSettingTab extends PluginSettingTab {
 		copilotPanel.appendChild(clientFieldsEl);
 		renderClientFields();
 
+		// ── Diagnostics panel ────────────────────────────────────
+		const diagSection = copilotPanel.createDiv({cls: 'sidekick-settings-diagnostics'});
+		new Setting(diagSection)
+			.setName('Connection diagnostics')
+			.setDesc('Check GitHub CLI discovery, authentication, Copilot binary, and PATH configuration.')
+			.addButton(button => button
+				.setButtonText('Run diagnostics')
+				.onClick(async () => {
+					button.setDisabled(true);
+					button.setButtonText('Running…');
+					diagResults.empty();
+					try {
+						const checks = await this.plugin.runDiagnostics();
+						for (const check of checks) {
+							const row = diagResults.createDiv({cls: 'sidekick-diag-row'});
+							const icon = row.createSpan({cls: `sidekick-diag-icon ${check.ok ? 'sidekick-diag-ok' : 'sidekick-diag-fail'}`});
+							setIcon(icon, check.ok ? 'check-circle' : 'x-circle');
+							row.createSpan({cls: 'sidekick-diag-label', text: check.label});
+							row.createEl('small', {cls: 'sidekick-diag-detail', text: check.detail});
+						}
+					} catch (e) {
+						diagResults.createEl('p', {text: `Diagnostics error: ${String(e)}`});
+					} finally {
+						button.setDisabled(false);
+						button.setButtonText('Run diagnostics');
+					}
+				}));
+		const diagResults = diagSection.createDiv({cls: 'sidekick-diag-results'});
+
 		// ══════════════════════════════════════════════════════════
 		// TAB 2: Models
 		// ══════════════════════════════════════════════════════════

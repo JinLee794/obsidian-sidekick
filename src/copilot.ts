@@ -34,6 +34,97 @@ declare const process: {
 };
 
 /**
+ * Use PowerShell's `Get-Command` to locate an executable on Windows.
+ *
+ * `Get-Command` searches PATH, App Paths registry keys, PowerShell aliases,
+ * and other discovery sources that neither `where.exe` nor a manual PATH
+ * scan will find — making it the most thorough discovery mechanism on Windows.
+ *
+ * Falls back to `where.exe` when PowerShell is unavailable.
+ * Returns the fully-qualified path or `undefined`.
+ *
+ * @internal Exported for testing.
+ */
+export async function resolveCommandViaPowerShell(name: string): Promise<string | undefined> {
+	if (!IS_WINDOWS) return undefined;
+	const fs = nodeRequire?.('node:fs/promises') as typeof import('node:fs/promises') ?? await import('node:fs/promises');
+	const {execFile} = nodeRequire?.('node:child_process') as typeof import('node:child_process') ?? await import('node:child_process');
+	const {promisify} = nodeRequire?.('node:util') as typeof import('node:util') ?? await import('node:util');
+	const execFileAsync = promisify(execFile);
+
+	// Try PowerShell 5.1 (ships with Windows 10+) first, then pwsh (PS 7+).
+	for (const shell of ['powershell.exe', 'pwsh.exe']) {
+		try {
+			const {stdout} = await execFileAsync(shell, [
+				'-NoProfile', '-NoLogo', '-NonInteractive', '-Command',
+				`Get-Command '${name}' -ErrorAction SilentlyContinue | Select-Object -First 1 -ExpandProperty Source`,
+			], {
+				timeout: 8000,
+				env: buildSpawnEnv(),
+				windowsHide: true,
+			});
+			const resolved = stdout.trim().split(/\r?\n/)[0]?.trim();
+			if (resolved && resolved.length > 0) {
+				try { await fs.access(resolved); return resolved; } catch { /* stale */ }
+			}
+		} catch { /* shell not available or command not found */ }
+	}
+
+	// Last resort: where.exe (lighter weight, but less thorough)
+	try {
+		const {stdout} = await execFileAsync('where.exe', [name], {
+			timeout: 5000,
+			env: buildSpawnEnv(),
+		});
+		const firstLine = stdout.trim().split(/\r?\n/)[0]?.trim();
+		if (firstLine && firstLine.length > 0) {
+			try { await fs.access(firstLine); return firstLine; } catch { /* stale */ }
+		}
+	} catch { /* where.exe failed */ }
+
+	return undefined;
+}
+
+/**
+ * Search for the `gh` CLI binary on disk.
+ *
+ * On Windows the PATH inherited by Electron may be incomplete (especially
+ * when launched from a shortcut or the Start menu). This function probes
+ * well-known install locations before falling back to a PATH-based search,
+ * then PowerShell's `Get-Command` as a final resort.
+ *
+ * Returns the fully-qualified path (e.g. `C:\Program Files\GitHub CLI\gh.exe`)
+ * or `undefined` when the binary cannot be located.
+ */
+export async function resolveGhPath(): Promise<string | undefined> {
+	const fs = nodeRequire?.('node:fs/promises') as typeof import('node:fs/promises') ?? await import('node:fs/promises');
+	const path = nodeRequire?.('node:path') as typeof import('node:path') ?? await import('node:path');
+
+	// 1. Probe well-known directories using getDefaultBinDirs() + PATH.
+	const searchPath = buildSpawnEnv()['PATH'] || '';
+	const dirs = searchPath.split(PATH_SEP).filter(Boolean);
+	const suffixes = IS_WINDOWS ? ['.exe', '.cmd', ''] : [''];
+
+	for (const dir of dirs) {
+		for (const suffix of suffixes) {
+			const candidate = path.join(dir, `gh${suffix}`);
+			try {
+				await fs.access(candidate);
+				return candidate;
+			} catch { /* not found */ }
+		}
+	}
+
+	// 2. On Windows, use PowerShell Get-Command / where.exe as fallback.
+	if (IS_WINDOWS) {
+		const found = await resolveCommandViaPowerShell('gh');
+		if (found) return found;
+	}
+
+	return undefined;
+}
+
+/**
  * Try to obtain a GitHub token from `gh auth token`.
  * Returns the token string, or undefined if `gh` is not available
  * or the user is not logged in.
@@ -42,11 +133,20 @@ export async function resolveGhToken(): Promise<string | undefined> {
 	const {execFile} = nodeRequire?.('node:child_process') as typeof import('node:child_process') ?? await import('node:child_process');
 	const {promisify} = nodeRequire?.('node:util') as typeof import('node:util') ?? await import('node:util');
 	const execFileAsync = promisify(execFile);
+
+	// Try to use a resolved full path so we don't depend on PATH alone.
+	const ghResolved = await resolveGhPath();
+	const ghBin = ghResolved ?? `gh${EXE_SUFFIX}`;
+	// Only use shell when falling back to a bare name (needed for .cmd
+	// shim resolution on Windows).  With a full path, execFile works
+	// directly and avoids space-in-path issues like "C:\Program Files\...".
+	const useShell = IS_WINDOWS && !ghResolved;
+
 	try {
-		const {stdout} = await execFileAsync(`gh${EXE_SUFFIX}`, ['auth', 'token'], {
+		const {stdout} = await execFileAsync(ghBin, ['auth', 'token'], {
 			timeout: 5000,
 			env: buildSpawnEnv(),
-			shell: IS_WINDOWS,
+			shell: useShell,
 		});
 		const token = stdout.trim();
 		return token.length > 0 ? token : undefined;
@@ -55,12 +155,115 @@ export async function resolveGhToken(): Promise<string | undefined> {
 	}
 }
 
+/** Diagnostic result for a single check. */
+export interface DiagnosticCheck {
+	label: string;
+	ok: boolean;
+	detail: string;
+}
+
+/**
+ * Run a series of diagnostics to verify that the GitHub CLI and Copilot CLI
+ * are properly discoverable and authenticated.
+ *
+ * Each check is independent; failures in one don't block others.
+ * The returned array always contains results for every check, in a fixed order.
+ */
+export async function diagnoseSetup(pluginDir: string, cliPath?: string): Promise<DiagnosticCheck[]> {
+	const checks: DiagnosticCheck[] = [];
+	const {execFile} = nodeRequire?.('node:child_process') as typeof import('node:child_process') ?? await import('node:child_process');
+	const {promisify} = nodeRequire?.('node:util') as typeof import('node:util') ?? await import('node:util');
+	const execFileAsync = promisify(execFile);
+
+	// ── 1. GitHub CLI location ─────────────────────────────
+	let ghPath: string | undefined;
+	try {
+		ghPath = await resolveGhPath();
+		if (ghPath) {
+			checks.push({label: 'GitHub CLI found', ok: true, detail: ghPath});
+		} else {
+			checks.push({label: 'GitHub CLI found', ok: false, detail: 'gh not found. Install from https://cli.github.com and restart Obsidian.'});
+		}
+	} catch (e) {
+		checks.push({label: 'GitHub CLI found', ok: false, detail: `Error searching for gh: ${String(e)}`});
+	}
+
+	// ── 2. GitHub CLI version ──────────────────────────────
+	if (ghPath) {
+		try {
+			const {stdout} = await execFileAsync(ghPath, ['--version'], {
+				timeout: 5000,
+				env: buildSpawnEnv(),
+			});
+			checks.push({label: 'GitHub CLI version', ok: true, detail: stdout.trim().split(/\r?\n/)[0] ?? 'unknown'});
+		} catch (e) {
+			checks.push({label: 'GitHub CLI version', ok: false, detail: `Failed to run gh --version: ${String(e)}`});
+		}
+	} else {
+		checks.push({label: 'GitHub CLI version', ok: false, detail: 'Skipped (gh not found)'});
+	}
+
+	// ── 3. GitHub CLI auth status ──────────────────────────
+	if (ghPath) {
+		try {
+			const {stdout} = await execFileAsync(ghPath, ['auth', 'status'], {
+				timeout: 10000,
+				env: buildSpawnEnv(),
+			});
+			const firstLine = stdout.trim().split(/\r?\n/)[0] ?? '';
+			checks.push({label: 'GitHub CLI authenticated', ok: true, detail: firstLine});
+		} catch (e) {
+			const msg = e instanceof Error ? (e as Error & {stderr?: string}).stderr || e.message : String(e);
+			checks.push({label: 'GitHub CLI authenticated', ok: false, detail: `Not authenticated. Run "gh auth login" in a terminal. ${msg}`});
+		}
+	} else {
+		checks.push({label: 'GitHub CLI authenticated', ok: false, detail: 'Skipped (gh not found)'});
+	}
+
+	// ── 4. gh auth token retrieval ─────────────────────────
+	try {
+		const token = await resolveGhToken();
+		if (token) {
+			checks.push({label: 'GitHub token retrieval', ok: true, detail: `Token obtained (${token.length} chars)`});
+		} else {
+			checks.push({label: 'GitHub token retrieval', ok: false, detail: 'gh auth token returned empty. Run "gh auth login" to authenticate.'});
+		}
+	} catch (e) {
+		checks.push({label: 'GitHub token retrieval', ok: false, detail: `Error: ${String(e)}`});
+	}
+
+	// ── 5. Copilot CLI binary ──────────────────────────────
+	try {
+		const resolvedCli = cliPath || await resolveDefaultCliPath(pluginDir);
+		if (resolvedCli) {
+			checks.push({label: 'Copilot CLI binary', ok: true, detail: resolvedCli});
+		} else {
+			checks.push({label: 'Copilot CLI binary', ok: false, detail: 'Not found locally; SDK will attempt PATH discovery.'});
+		}
+	} catch (e) {
+		checks.push({label: 'Copilot CLI binary', ok: false, detail: `Error: ${String(e)}`});
+	}
+
+	// ── 6. PATH sanity ─────────────────────────────────────
+	const env = cleanEnv();
+	const pathVal = env['PATH'] || '';
+	const pathDirs = pathVal.split(PATH_SEP).filter(Boolean);
+	checks.push({
+		label: 'Subprocess PATH',
+		ok: pathDirs.length > 3,
+		detail: `${pathDirs.length} dirs. First: ${pathDirs[0] ?? '(empty)'}`,
+	});
+
+	return checks;
+}
+
 /**
  * Resolve the platform-specific Copilot native binary.
  *
  * Search order:
  *   1. `<pluginDir>/copilot[.exe]`  — flat copy deployed alongside main.js
  *   2. `<pluginDir>/node_modules/@github/copilot-<platform>-<arch>/copilot[.exe]` — dev checkout
+ *   3. (Windows) PowerShell `Get-Command copilot` / `where.exe copilot` — system-wide
  *
  * `pluginDir` must be the absolute path of the plugin folder on disk
  * (obtained from the Obsidian Plugin instance — NOT from __dirname, which
@@ -70,28 +273,35 @@ export async function resolveGhToken(): Promise<string | undefined> {
  * cliPath and let the SDK discover the binary from PATH.
  */
 async function resolveDefaultCliPath(pluginDir: string): Promise<string> {
-	if (!pluginDir) return '';
 	// Lazy-load Node.js builtins so the module can be imported on mobile
 	const path = nodeRequire?.('node:path') as typeof import('node:path') ?? await import('node:path');
 	const fs = nodeRequire?.('node:fs/promises') as typeof import('node:fs/promises') ?? await import('node:fs/promises');
 	const ext = process.platform === 'win32' ? '.exe' : '';
 
-	// 1. Flat copy next to main.js (deployed plugin)
-	const flatBin = path.join(pluginDir, `copilot${ext}`);
-	try {
-		await fs.access(flatBin);
-		return flatBin;
-	} catch { /* not found */ }
+	if (pluginDir) {
+		// 1. Flat copy next to main.js (deployed plugin)
+		const flatBin = path.join(pluginDir, `copilot${ext}`);
+		try {
+			await fs.access(flatBin);
+			return flatBin;
+		} catch { /* not found */ }
 
-	// 2. node_modules structure (dev checkout)
-	const nativePkg = `@github/copilot-${process.platform}-${process.arch}`;
-	const nativeBin = path.join(pluginDir, 'node_modules', nativePkg, `copilot${ext}`);
-	try {
-		await fs.access(nativeBin);
-		return nativeBin;
-	} catch { /* not found */ }
+		// 2. node_modules structure (dev checkout)
+		const nativePkg = `@github/copilot-${process.platform}-${process.arch}`;
+		const nativeBin = path.join(pluginDir, 'node_modules', nativePkg, `copilot${ext}`);
+		try {
+			await fs.access(nativeBin);
+			return nativeBin;
+		} catch { /* not found */ }
+	}
 
-	// Not bundled — caller will omit cliPath so the SDK uses PATH.
+	// 3. System-wide search via PowerShell / where.exe (Windows)
+	if (IS_WINDOWS) {
+		const found = await resolveCommandViaPowerShell('copilot');
+		if (found) return found;
+	}
+
+	// Not found — caller will omit cliPath so the SDK uses PATH.
 	return '';
 }
 
@@ -103,8 +313,10 @@ async function resolveDefaultCliPath(pluginDir: string): Promise<string> {
  * On macOS/Linux, augments PATH with common binary directories that
  * Electron apps launched from Finder don't inherit from the shell.
  * This ensures the Copilot CLI can find tools like `gh` for authentication.
+ *
+ * @internal Exported for testing only.
  */
-function cleanEnv(): Record<string, string> {
+export function cleanEnv(): Record<string, string> {
 	const ALLOWED_PREFIXES = [
 		'PATH', 'HOME', 'USERPROFILE', 'TMPDIR', 'TEMP', 'TMP',
 		'LANG', 'LC_', 'SHELL', 'TERM', 'COLORTERM',
@@ -117,24 +329,40 @@ function cleanEnv(): Record<string, string> {
 		'http_proxy', 'https_proxy', 'no_proxy', 'all_proxy',
 		'GITHUB_', 'GH_', 'COPILOT_',
 		'SSL_CERT_FILE', 'SSL_CERT_DIR', 'NODE_EXTRA_CA_CERTS',
+		'PATHEXT', 'CHOCOLATEYINSTALL',
 	];
 	const env: Record<string, string> = {};
 	for (const [key, value] of Object.entries(process.env)) {
 		if (value === undefined) continue;
-		if (ALLOWED_PREFIXES.some(prefix => key === prefix || key.startsWith(prefix))) {
+		// Case-insensitive match: Windows stores PATH as 'Path' but we
+		// need it to pass the allowlist regardless of casing.
+		const upper = key.toUpperCase();
+		if (ALLOWED_PREFIXES.some(prefix => upper === prefix || upper.startsWith(prefix))) {
 			env[key] = value;
 		}
 	}
+
+	// Ensure we have a canonical PATH key.  On Windows the original env key
+	// may be "Path" (title-case).  Normalise to "PATH" so child processes
+	// and subsequent lookups always find it.
+	const pathKey = Object.keys(env).find(k => k.toUpperCase() === 'PATH');
+	const currentPath = (pathKey ? env[pathKey] : '') || '';
 
 	// GUI-launched Electron apps inherit only a minimal PATH (especially on
 	// macOS where Finder-launched apps see /usr/bin:/bin:/usr/sbin:/sbin).
 	// Augment it so the Copilot CLI subprocess can find `gh`, `az`, etc.
 	const extraDirs = getDefaultBinDirs();
-	const currentPath = env['PATH'] || env['Path'] || '';
 	const existingDirs = new Set(currentPath.split(PATH_SEP));
 	const missing = extraDirs.filter(d => !existingDirs.has(d));
-	if (missing.length > 0) {
-		env['PATH'] = [...missing, currentPath].filter(Boolean).join(PATH_SEP);
+	const finalPath = [...missing, currentPath].filter(Boolean).join(PATH_SEP);
+
+	// Remove any original case-variant and write a canonical 'PATH'.
+	if (pathKey && pathKey !== 'PATH') delete env[pathKey];
+	env['PATH'] = finalPath;
+
+	// Windows: ensure PATHEXT is present so .cmd/.exe resolution works.
+	if (IS_WINDOWS && !Object.keys(env).some(k => k.toUpperCase() === 'PATHEXT')) {
+		env['PATHEXT'] = '.COM;.EXE;.BAT;.CMD;.VBS;.VBE;.JS;.JSE;.WSF;.WSH;.MSC;.PS1';
 	}
 
 	return env;

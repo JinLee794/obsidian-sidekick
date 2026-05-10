@@ -1,6 +1,7 @@
 import {Plugin, FileSystemAdapter, Notice, setIcon} from 'obsidian';
 import {DEFAULT_SETTINGS, SidekickSettings, SidekickSettingTab, SECURE_FIELDS, loadSecureField, saveSecureField} from "./settings";
-import {CopilotService, resolveGhToken} from "./copilot";
+import {CopilotService, resolveGhToken, diagnoseSetup} from "./copilot";
+import type {DiagnosticCheck} from "./copilot";
 import {resolveEnvRef, purgeAllSecrets} from "./secureStorage";
 import {SidekickView, SIDEKICK_VIEW_TYPE} from "./sidekickView";
 import {registerEditorMenu, registerFileMenu} from './editor/editorMenu';
@@ -121,6 +122,18 @@ export default class SidekickPlugin extends Plugin {
 		if (this.telegramBot) {
 			void this.telegramBot.disconnect();
 		}
+	}
+
+	/** Run connection diagnostics (gh CLI discovery, auth, Copilot binary, PATH). */
+	async runDiagnostics(): Promise<DiagnosticCheck[]> {
+		let pluginDir = '';
+		if (this.app.vault.adapter instanceof FileSystemAdapter && this.manifest.dir) {
+			const pathMod = (window as unknown as {require?: NodeRequire}).require?.('node:path') as typeof import('node:path') | undefined;
+			const base = this.app.vault.adapter.getBasePath();
+			pluginDir = pathMod ? pathMod.join(base, this.manifest.dir) : `${base}/${this.manifest.dir}`;
+		}
+		const cliPath = this.settings.copilotLocation.trim() || undefined;
+		return diagnoseSetup(pluginDir, cliPath);
 	}
 
 	async connectTelegram(): Promise<void> {

@@ -2125,6 +2125,61 @@
 	font-size: var(--font-ui-small);
 }
 
+/* ── Diagnostics panel ───────────────────────────────────────── */
+
+.sidekick-settings-diagnostics {
+	margin-top: 12px;
+}
+
+.sidekick-diag-results {
+	margin-top: 8px;
+}
+
+.sidekick-diag-row {
+	display: flex;
+	align-items: flex-start;
+	gap: 8px;
+	padding: 4px 0;
+	border-bottom: 1px solid var(--background-modifier-border);
+}
+
+.sidekick-diag-row:last-child {
+	border-bottom: none;
+}
+
+.sidekick-diag-icon {
+	flex-shrink: 0;
+	width: 18px;
+	height: 18px;
+	display: flex;
+	align-items: center;
+	justify-content: center;
+}
+
+.sidekick-diag-icon svg {
+	width: 16px;
+	height: 16px;
+}
+
+.sidekick-diag-ok {
+	color: var(--text-success, #4caf50);
+}
+
+.sidekick-diag-fail {
+	color: var(--text-error, #e53935);
+}
+
+.sidekick-diag-label {
+	font-weight: var(--font-semibold, 600);
+	flex-shrink: 0;
+	min-width: 180px;
+}
+
+.sidekick-diag-detail {
+	color: var(--text-muted);
+	word-break: break-word;
+}
+
 /* ── Utility: hide any element with .is-hidden ───────────────── */
 
 .is-hidden {
