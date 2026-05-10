@@ -1,9 +1,75 @@
 import {TFile, TFolder, normalizePath, setIcon} from 'obsidian';
 import type {SidekickView} from '../sidekickView';
+import type {CommandDefinition, CommandContext} from '../copilot';
 import {getTriggersFolder} from '../settings';
+
+declare module '../sidekickView' {
+	interface SidekickView {
+		getBuiltinCommands(): CommandDefinition[];
+		executeBuiltinCommand(name: string, arg?: string): void;
+		showHelpInfo(): void;
+		showAgentsList(): void;
+		showModelsList(): void;
+		showReference(): Promise<void>;
+		showTriggerDebug(): void;
+		showTasksOverview(): void;
+		compactConversation(): Promise<void>;
+	}
+}
+
+/**
+ * Static descriptors for all built-in slash commands.
+ *
+ * This array is the single source of truth for command names + descriptions.
+ * The same data is used to:
+ *   1. Render slash-command completion in the Obsidian input UI ({@link installPromptSlash})
+ *   2. Route input intercepts before they reach the SDK ({@link installChatSession})
+ *   3. Register commands with the Copilot SDK via `SessionConfig.commands`
+ *      so the SDK is aware of them and any agent/MCP tool that calls them
+ *      will trigger the same handler.
+ *
+ * Handlers themselves close over a {@link SidekickView} instance and reference
+ * user content (agents, prompts, skills, triggers) loaded from the configured
+ * sidekick folder. See {@link buildBuiltinCommands} for the SDK-shaped factory.
+ */
+export const BUILTIN_COMMAND_DESCRIPTORS: ReadonlyArray<{name: string; description: string}> = [
+	{name: 'clear', description: 'Clear conversation and start fresh'},
+	{name: 'new', description: 'Start a new conversation (keeps history in sidebar)'},
+	{name: 'help', description: 'Show available commands, agents, and prompts'},
+	{name: 'agents', description: 'List available agents'},
+	{name: 'models', description: 'List available models'},
+	{name: 'model', description: 'Switch model (e.g. /model gpt-4o)'},
+	{name: 'agent', description: 'Switch agent (e.g. /agent coder)'},
+	{name: 'trigger-debug', description: 'Show trigger diagnostic info'},
+	{name: 'tasks', description: 'Show active and recent tasks'},
+	{name: 'compact', description: 'Summarize conversation history to reduce context usage'},
+	{name: 'reference', description: 'Show frontmatter property reference for agents, prompts, triggers, and skills'},
+];
+
+/**
+ * Build SDK `CommandDefinition[]` for a view instance.
+ *
+ * Each definition wraps {@link SidekickView.executeBuiltinCommand}, which itself
+ * dispatches to handlers that read from the view's loaded sidekick content
+ * (agents/prompts/skills/triggers).
+ */
+export function buildBuiltinCommands(view: SidekickView): CommandDefinition[] {
+	return BUILTIN_COMMAND_DESCRIPTORS.map(d => ({
+		name: d.name,
+		description: d.description,
+		handler: (ctx: CommandContext) => {
+			const arg = ctx.args.trim() || undefined;
+			view.executeBuiltinCommand(d.name, arg);
+		},
+	}));
+}
 
 export function installBuiltinCommands(ViewClass: {prototype: unknown}): void {
 	const proto = ViewClass.prototype as SidekickView;
+
+	proto.getBuiltinCommands = function(): CommandDefinition[] {
+		return buildBuiltinCommands(this);
+	};
 
 	proto.executeBuiltinCommand = function(name: string, arg?: string): void {
 		switch (name) {
@@ -64,6 +130,9 @@ export function installBuiltinCommands(ViewClass: {prototype: unknown}): void {
 			case 'tasks':
 				this.showTasksOverview();
 				break;
+			case 'compact':
+				void this.compactConversation();
+				break;
 			case 'reference':
 				void this.showReference();
 				break;
@@ -71,8 +140,7 @@ export function installBuiltinCommands(ViewClass: {prototype: unknown}): void {
 	};
 
 	proto.showHelpInfo = function(): void {
-		const ViewClass = this.constructor as typeof import('../sidekickView').SidekickView;
-		const commandLines = ViewClass.BUILTIN_COMMANDS.map(c => `  /${c.name} — ${c.description}`).join('\n');
+		const commandLines = BUILTIN_COMMAND_DESCRIPTORS.map(c => `  /${c.name} — ${c.description}`).join('\n');
 		const agentLines = this.agents.length > 0
 			? this.agents.map(a => `  @${a.name} — ${a.description || 'No description'}`).join('\n')
 			: '  (none configured)';
@@ -305,5 +373,27 @@ export function installBuiltinCommands(ViewClass: {prototype: unknown}): void {
 		}
 
 		this.scrollToBottom();
+	};
+
+	proto.compactConversation = async function(): Promise<void> {
+		if (!this.currentSession) {
+			this.addInfoMessage('No active session to compact.');
+			return;
+		}
+		this.addInfoMessage('Compacting conversation history…');
+		try {
+			const result = await this.currentSession.rpc.history.compact();
+			if (result.success) {
+				this.contextHintShown = false;
+				const ctx = result.contextWindow;
+				const freed = result.tokensRemoved > 0 ? ` Freed ${result.tokensRemoved.toLocaleString()} tokens.` : '';
+				const usage = ctx ? ` Context now at ${Math.round((ctx.currentTokens / ctx.tokenLimit) * 100)}%.` : '';
+				this.addInfoMessage(`Compaction complete.${freed}${usage}`);
+			} else {
+				this.addInfoMessage('Compaction did not succeed — the conversation may be too short to compact.');
+			}
+		} catch (e) {
+			this.addInfoMessage(`Compaction failed: ${String(e)}`);
+		}
 	};
 }

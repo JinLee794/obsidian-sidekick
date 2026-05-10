@@ -1,11 +1,33 @@
-import {Notice, setIcon} from 'obsidian';
+import {Notice, setIcon, normalizePath, TFile} from 'obsidian';
 import type {SidekickView} from '../sidekickView';
-import type {McpAuthConfig, McpToolInfo} from '../types';
+import type {McpAuthConfig, McpToolInfo, McpServerEntry} from '../types';
 import {getToolsFolder, setMcpInputValue} from '../settings';
 import {McpEditorModal} from '../modals/mcpEditorModal';
 import {AgencyConfigModal} from '../modals/agencyConfigModal';
 import {debugTrace} from '../debug';
 import {probeAllMcpServers, isProxyOnlyServer, isAgencyAvailable, isAgencyService, resetAgencyCache, enrichServersWithAzureAuth, needsAzureAuth, clearAzureTokenCache} from '../mcpProbe';
+
+/** Name for the built-in Obsidian Intelligence Layer MCP server. */
+export const OIL_SERVER_NAME = 'oil';
+
+/** NPM package for the OIL MCP server. */
+export const OIL_PACKAGE = '@jinlee794/obsidian-intelligence-layer@latest';
+
+/** Build the built-in OIL McpServerEntry, injecting the vault path at runtime. */
+export function buildOilServerEntry(vaultPath: string): McpServerEntry {
+	return {
+		name: OIL_SERVER_NAME,
+		config: {
+			type: 'stdio',
+			command: 'npx',
+			args: ['-y', OIL_PACKAGE, 'mcp'],
+			env: {
+				'npm_config_@jinlee794:registry': 'https://npm.pkg.github.com',
+				'OBSIDIAN_VAULT_PATH': vaultPath,
+			},
+		},
+	};
+}
 
 export function installToolsPanel(ViewClass: {prototype: unknown}): void {
 	const proto = ViewClass.prototype as SidekickView;
@@ -48,6 +70,73 @@ export function installToolsPanel(ViewClass: {prototype: unknown}): void {
 		this.toolsMcpListEl = mcpSection.createDiv({cls: 'sidekick-tools-list'});
 	};
 
+	proto.buildOilPanel = function(parent: HTMLElement): void {
+		this.toolsOilListEl = parent.createDiv({cls: 'sidekick-tools-oil-inline'});
+	};
+
+	proto.renderOilPanel = function(): void {
+		this.toolsOilListEl.empty();
+
+		const runtimeStatus = this.mcpServerStatus.get(OIL_SERVER_NAME);
+		const item = this.toolsOilListEl.createDiv({cls: 'sidekick-tools-item'});
+
+		// Status dot
+		const statusDot = item.createSpan({cls: 'sidekick-tools-status-dot'});
+		if (runtimeStatus) {
+			statusDot.toggleClass('is-connected', runtimeStatus.status === 'connected');
+			statusDot.toggleClass('is-error', runtimeStatus.status === 'error');
+			statusDot.toggleClass('is-pending', runtimeStatus.status === 'pending');
+			const label = runtimeStatus.status === 'connected' ? 'Connected'
+				: runtimeStatus.status === 'error' ? 'Error'
+				: 'Connecting…';
+			statusDot.setAttribute('title', runtimeStatus.message || label);
+		} else {
+			statusDot.toggleClass('is-enabled', true);
+			statusDot.setAttribute('title', 'Enabled (connects on next session)');
+		}
+
+		const info = item.createDiv({cls: 'sidekick-tools-item-info'});
+		const nameRow = info.createDiv({cls: 'sidekick-tools-item-name'});
+		nameRow.setText(OIL_SERVER_NAME);
+		const builtInBadge = nameRow.createSpan({cls: 'sidekick-tools-tag sidekick-tools-tag-muted'});
+		builtInBadge.setText('built-in');
+		builtInBadge.style.marginLeft = '6px';
+		builtInBadge.style.fontSize = '10px';
+
+		// Error message
+		if (runtimeStatus?.status === 'error' && runtimeStatus.message) {
+			const errMsg = info.createDiv({cls: 'sidekick-tools-item-error'});
+			errMsg.setText(runtimeStatus.message);
+		}
+
+		const meta = info.createDiv({cls: 'sidekick-tools-item-meta'});
+		const typeTag = meta.createSpan({cls: 'sidekick-tools-tag'});
+		typeTag.setText('stdio');
+		const pkgTag = meta.createSpan({cls: 'sidekick-tools-tag sidekick-tools-tag-muted'});
+		pkgTag.setText(OIL_PACKAGE);
+		pkgTag.setAttribute('title', OIL_PACKAGE);
+
+		// Discovered tools
+		const discoveredTools = runtimeStatus?.tools;
+		if (discoveredTools && discoveredTools.length > 0) {
+			const details = info.createEl('details', {cls: 'sidekick-tools-discovered-details'});
+			const summary = details.createEl('summary', {cls: 'sidekick-tools-discovered-summary'});
+			summary.createSpan({cls: 'sidekick-tools-tag sidekick-tools-tag-accent', text: `${discoveredTools.length} tool(s) available`});
+			const toolsListEl = details.createDiv({cls: 'sidekick-tools-discovered'});
+			for (const tool of discoveredTools) {
+				const toolEl = toolsListEl.createDiv({cls: 'sidekick-tools-discovered-item'});
+				const dot = toolEl.createSpan({cls: 'sidekick-tools-discovered-dot'});
+				dot.toggleClass('is-connected', runtimeStatus?.status === 'connected');
+				toolEl.createSpan({cls: 'sidekick-tools-discovered-name', text: tool.name});
+				if (tool.description) {
+					const descEl = toolEl.createSpan({cls: 'sidekick-tools-discovered-desc'});
+					descEl.setText(tool.description);
+					descEl.setAttribute('title', tool.description);
+				}
+			}
+		}
+	};
+
 	proto.buildAgencyPanel = function(parent: HTMLElement): void {
 		const wrapper = parent.createDiv({cls: 'sidekick-tools-wrapper'});
 
@@ -88,27 +177,61 @@ export function installToolsPanel(ViewClass: {prototype: unknown}): void {
 	};
 
 	proto.buildAgentsPanel = function(parent: HTMLElement): void {
-		const wrapper = parent.createDiv({cls: 'sidekick-tools-wrapper'});
+		const wrapper = parent.createDiv({cls: 'sidekick-prompts-wrapper'});
 
-		const agentSection = wrapper.createDiv({cls: 'sidekick-tools-section'});
-		const agentHeader = agentSection.createDiv({cls: 'sidekick-tools-header'});
-		agentHeader.createDiv({cls: 'sidekick-tools-title', text: 'Agent tool access'});
-		const agentControls = agentHeader.createDiv({cls: 'sidekick-tools-controls'});
-		const newAgentBtn = agentControls.createEl('button', {cls: 'clickable-icon sidekick-triggers-ctrl-btn', attr: {title: 'New agent'}});
+		// ── Header ───────────────────────────────────────────────
+		const header = wrapper.createDiv({cls: 'sidekick-tools-header'});
+		header.createDiv({cls: 'sidekick-tools-title', text: 'Agents'});
+		const controls = header.createDiv({cls: 'sidekick-tools-controls'});
+
+		controls.createSpan({
+			cls: 'sidekick-tools-path',
+			text: `${this.plugin.settings.sidekickFolder}/agents/`,
+		});
+
+		const newAgentBtn = controls.createEl('button', {
+			cls: 'clickable-icon sidekick-triggers-ctrl-btn',
+			attr: {title: 'New agent'},
+		});
 		setIcon(newAgentBtn, 'plus');
 		newAgentBtn.addEventListener('click', () => this.openAgentEditor());
-		this.toolsAgentListEl = agentSection.createDiv({cls: 'sidekick-tools-list'});
+
+		const refreshBtn = controls.createEl('button', {
+			cls: 'clickable-icon sidekick-triggers-ctrl-btn',
+			attr: {title: 'Refresh agents'},
+		});
+		setIcon(refreshBtn, 'refresh-cw');
+		refreshBtn.addEventListener('click', () => {
+			void this.loadAllConfigs({silent: true}).then(() => this.renderAgentToolMappings());
+		});
+
+		// ── Filter input ──────────────────────────────────────
+		const filterRow = wrapper.createDiv({cls: 'sidekick-prompts-filter-row'});
+		const filterInput = filterRow.createEl('input', {
+			cls: 'sidekick-prompts-filter',
+			attr: {type: 'text', placeholder: 'Filter agents…'},
+		});
+		this.agentsPanelFilterEl = filterInput;
+		this.agentsPanelFilter = '';
+		filterInput.addEventListener('input', () => {
+			this.agentsPanelFilter = filterInput.value.toLowerCase();
+			this.renderAgentToolMappings();
+		});
+
+		// ── Agents list ───────────────────────────────────────
+		this.toolsAgentListEl = wrapper.createDiv({cls: 'sidekick-prompts-list'});
 	};
 
 	proto.renderToolsPanel = function(): void {
+		this.renderOilPanel();
 		this.renderMcpServersList();
 	};
 
 	proto.renderMcpServersList = function(): void {
 		this.toolsMcpListEl.empty();
 
-		// Filter out agency-discovered servers — they go in their own section
-		const userServers = this.mcpServers.filter((s: {name: string; config: Record<string, unknown>}) => !isAgencyService(s));
+		// Filter out agency-discovered servers and built-in OIL — they have their own sections
+		const userServers = this.mcpServers.filter((s: {name: string; config: Record<string, unknown>}) => !isAgencyService(s) && s.name !== OIL_SERVER_NAME);
 
 		if (userServers.length === 0) {
 			const empty = this.toolsMcpListEl.createDiv({cls: 'sidekick-tools-empty'});
@@ -174,9 +297,9 @@ export function installToolsPanel(ViewClass: {prototype: unknown}): void {
 			}
 
 			// Note for Azure-authenticated servers that failed
-			if (enabled && !isProxyOnlyServer(server) && needsAzureAuth(server) && runtimeStatus?.status === 'error' && runtimeStatus?.httpStatus === 401) {
+			if (enabled && !isProxyOnlyServer(server) && needsAzureAuth(server) && runtimeStatus?.status === 'error' && (runtimeStatus?.httpStatus === 401 || runtimeStatus?.httpStatus === 403)) {
 				const note = info.createDiv({cls: 'sidekick-tools-item-proxy-note'});
-				note.setText('Sign in with `az login` then click refresh to authenticate');
+				note.setText('Azure auth failed — running az login…');
 			}
 
 			const meta = info.createDiv({cls: 'sidekick-tools-item-meta'});
@@ -359,47 +482,117 @@ export function installToolsPanel(ViewClass: {prototype: unknown}): void {
 	proto.renderAgentToolMappings = function(): void {
 		this.toolsAgentListEl.empty();
 
-		if (this.agents.length === 0) {
+		const filter = this.agentsPanelFilter ?? '';
+		const filtered = this.agents.filter(a =>
+			!filter ||
+			a.name.toLowerCase().includes(filter) ||
+			a.description.toLowerCase().includes(filter) ||
+			(a.model ?? '').toLowerCase().includes(filter)
+		);
+
+		if (filtered.length === 0) {
 			const empty = this.toolsAgentListEl.createDiv({cls: 'sidekick-tools-empty'});
-			empty.setText('No agents configured.');
+			if (this.agents.length === 0) {
+				empty.createSpan({text: 'No agents configured. '});
+				const hint = empty.createEl('span', {cls: 'sidekick-tools-hint'});
+				hint.setText(`Add .agent.md files to ${this.plugin.settings.sidekickFolder}/agents/`);
+			} else {
+				empty.createSpan({text: 'No agents match your filter.'});
+			}
 			return;
 		}
 
-		for (const agent of this.agents) {
-			const item = this.toolsAgentListEl.createDiv({cls: 'sidekick-tools-agent-item'});
+		const agentNames = new Set(this.agents.map(a => a.name));
 
-			const header = item.createDiv({cls: 'sidekick-tools-agent-header'});
-			const iconEl = header.createSpan({cls: 'sidekick-tools-agent-icon'});
-			setIcon(iconEl, 'bot');
-			header.createSpan({cls: 'sidekick-tools-agent-name', text: agent.name});
+		for (const agent of filtered) {
+			const card = this.toolsAgentListEl.createDiv({cls: 'sidekick-prompt-card'});
+			const isActive = this.selectedAgent === agent.name;
+			if (isActive) card.addClass('is-active');
 
-			// Edit button
-			const editBtn = header.createEl('button', {cls: 'clickable-icon sidekick-tools-agent-edit', attr: {title: 'Edit agent'}});
+			// Click card to open the .agent.md file
+			card.addEventListener('click', (e) => {
+				const target = e.target as HTMLElement;
+				if (target.closest('.sidekick-agent-card-use') || target.closest('.sidekick-agent-card-edit')) return;
+				const file = this.app.vault.getAbstractFileByPath(normalizePath(agent.filePath));
+				if (file instanceof TFile) {
+					void this.app.workspace.getLeaf(false).openFile(file);
+				}
+			});
+			card.style.cursor = 'pointer';
+
+			// ── Top row: name + active badge + actions ────────────────────────────────────────
+			const topRow = card.createDiv({cls: 'sidekick-prompt-card-top'});
+
+			const nameEl = topRow.createDiv({cls: 'sidekick-prompt-card-name'});
+			const agentIcon = nameEl.createSpan({cls: 'sidekick-skill-card-icon'});
+			setIcon(agentIcon, 'bot');
+			nameEl.createSpan({text: agent.name});
+
+			const badges = topRow.createDiv({cls: 'sidekick-prompt-card-badges'});
+			if (isActive) {
+				badges.createSpan({cls: 'sidekick-skill-card-status is-enabled', text: 'active'});
+			}
+			if (agent.model) {
+				const modelBadge = badges.createSpan({cls: 'sidekick-prompt-card-agent', attr: {title: `Model: ${agent.model}`}});
+				const mIcon = modelBadge.createSpan();
+				setIcon(mIcon, 'cpu');
+				modelBadge.createSpan({text: agent.model});
+			}
+
+			const editBtn = topRow.createEl('button', {
+				cls: 'sidekick-agent-card-edit clickable-icon',
+				attr: {title: 'Edit agent in modal'},
+			});
 			setIcon(editBtn, 'pencil');
 			editBtn.addEventListener('click', (e) => { e.stopPropagation(); this.openAgentEditor(agent); });
 
+			const useBtn = topRow.createEl('button', {
+				cls: 'sidekick-prompt-card-use sidekick-agent-card-use',
+				text: isActive ? 'Active' : 'Use',
+				attr: {title: isActive ? 'Already the active agent' : 'Set as active agent in chat'},
+			});
+			if (isActive) useBtn.disabled = true;
+			useBtn.addEventListener('click', () => {
+				this.switchTab('chat');
+				this.selectAgent(agent.name);
+			});
+
+			// ── Description ───────────────────────────────────────────
 			if (agent.description) {
-				const desc = item.createDiv({cls: 'sidekick-tools-agent-desc'});
-				desc.setText(agent.description);
-				desc.setAttribute('title', agent.description);
+				card.createDiv({cls: 'sidekick-prompt-card-desc', text: agent.description});
 			}
 
-			// Collapsible tools/skills section
-			const details = item.createEl('details', {cls: 'sidekick-tools-agent-details'});
-			const toolCount = agent.tools === undefined
-				? this.mcpServers.length
-				: agent.tools.length;
-			const skillCount = agent.skills === undefined
-				? this.skills.length
-				: agent.skills.length;
-			const summary = details.createEl('summary', {cls: 'sidekick-tools-agent-summary'});
-			summary.createSpan({text: `${toolCount} tool(s), ${skillCount} skill(s)`});
+			// ── Stats row ──────────────────────────────────────────────
+			const toolEntries = agent.tools === undefined ? this.mcpServers.map(s => s.name) : agent.tools;
+			const subAgentRefs = toolEntries.filter(t => agentNames.has(t) && t !== agent.name);
+			const toolRefs = toolEntries.filter(t => !subAgentRefs.includes(t));
+			const skillEntries = agent.skills === undefined ? this.skills.map(s => s.name) : agent.skills;
+			const handoffCount = agent.handoffs?.length ?? 0;
 
-			const toolsList = details.createDiv({cls: 'sidekick-tools-agent-tools'});
+			const stats = card.createDiv({cls: 'sidekick-agent-card-stats'});
+			const addStat = (icon: string, count: number, label: string, allMarker: boolean) => {
+				const stat = stats.createSpan({cls: 'sidekick-agent-card-stat'});
+				const i = stat.createSpan({cls: 'sidekick-agent-card-stat-icon'});
+				setIcon(i, icon);
+				stat.createSpan({text: ` ${count} ${label}${allMarker ? ' (all)' : ''}`});
+			};
+			addStat('plug', toolRefs.length, toolRefs.length === 1 ? 'tool' : 'tools', agent.tools === undefined);
+			addStat('sparkles', skillEntries.length, skillEntries.length === 1 ? 'skill' : 'skills', agent.skills === undefined);
+			if (subAgentRefs.length > 0) addStat('git-branch', subAgentRefs.length, 'sub', false);
+			if (handoffCount > 0) addStat('arrow-right', handoffCount, 'handoff' + (handoffCount === 1 ? '' : 's'), false);
 
-			// Determine which servers this agent has access to
+			// ── Collapsible details ─────────────────────────────────────────
+			const details = card.createEl('details', {cls: 'sidekick-agent-card-details'});
+			// Stop the click on summary from bubbling to the card open-file handler
+			const summary = details.createEl('summary', {cls: 'sidekick-agent-card-summary'});
+			summary.setText('Show tools, skills & instructions');
+			summary.addEventListener('click', (e) => e.stopPropagation());
+
+			// Tools
+			const toolsBlock = details.createDiv({cls: 'sidekick-agent-card-block'});
+			toolsBlock.createSpan({cls: 'sidekick-agent-card-block-label', text: 'Tools'});
+			const toolsList = toolsBlock.createDiv({cls: 'sidekick-tools-agent-tools'});
 			if (agent.tools === undefined) {
-				// undefined = all servers
 				const allTag = toolsList.createSpan({cls: 'sidekick-tools-tag sidekick-tools-tag-accent'});
 				allTag.setText('All MCP servers');
 				for (const server of this.mcpServers) {
@@ -408,10 +601,8 @@ export function installToolsPanel(ViewClass: {prototype: unknown}): void {
 					tag.setText(server.name);
 				}
 			} else if (agent.tools.length === 0) {
-				const noneTag = toolsList.createSpan({cls: 'sidekick-tools-tag sidekick-tools-tag-muted'});
-				noneTag.setText('No tools');
+				toolsList.createSpan({cls: 'sidekick-tools-tag sidekick-tools-tag-muted', text: 'No tools'});
 			} else {
-				const agentNames = new Set(this.agents.map(a => a.name));
 				for (const toolName of agent.tools) {
 					const isAgentRef = agentNames.has(toolName) && toolName !== agent.name;
 					const tag = toolsList.createSpan({cls: 'sidekick-tools-tag'});
@@ -426,28 +617,28 @@ export function installToolsPanel(ViewClass: {prototype: unknown}): void {
 						tag.toggleClass('is-enabled', serverExists && isEnabled);
 						tag.toggleClass('is-missing', !serverExists);
 						tag.setText(toolName);
-						if (!serverExists) {
-							tag.setAttribute('title', 'Server not found in mcp.json');
-						}
+						if (!serverExists) tag.setAttribute('title', 'Server not found in mcp.json');
 					}
 				}
 			}
 
-			// Skills section
+			// Skills
 			if (this.skills.length > 0) {
-				const skillsRow = details.createDiv({cls: 'sidekick-tools-agent-tools'});
+				const skillsBlock = details.createDiv({cls: 'sidekick-agent-card-block'});
+				skillsBlock.createSpan({cls: 'sidekick-agent-card-block-label', text: 'Skills'});
+				const skillsList = skillsBlock.createDiv({cls: 'sidekick-tools-agent-tools'});
 				if (agent.skills === undefined) {
-					skillsRow.createSpan({cls: 'sidekick-tools-tag sidekick-tools-tag-accent', text: 'All skills'});
+					skillsList.createSpan({cls: 'sidekick-tools-tag sidekick-tools-tag-accent', text: 'All skills'});
 					for (const skill of this.skills) {
-						const tag = skillsRow.createSpan({cls: 'sidekick-tools-tag'});
+						const tag = skillsList.createSpan({cls: 'sidekick-tools-tag'});
 						tag.toggleClass('is-enabled', this.enabledSkills.has(skill.name));
 						tag.setText(skill.name);
 					}
 				} else if (agent.skills.length === 0) {
-					skillsRow.createSpan({cls: 'sidekick-tools-tag sidekick-tools-tag-muted', text: 'No skills'});
+					skillsList.createSpan({cls: 'sidekick-tools-tag sidekick-tools-tag-muted', text: 'No skills'});
 				} else {
 					for (const skillName of agent.skills) {
-						const tag = skillsRow.createSpan({cls: 'sidekick-tools-tag'});
+						const tag = skillsList.createSpan({cls: 'sidekick-tools-tag'});
 						const exists = this.skills.some(s => s.name === skillName);
 						tag.toggleClass('is-enabled', exists && this.enabledSkills.has(skillName));
 						tag.toggleClass('is-missing', !exists);
@@ -456,14 +647,36 @@ export function installToolsPanel(ViewClass: {prototype: unknown}): void {
 				}
 			}
 
-			// Excluded built-in tools section
+			// Excluded built-in tools
 			if (agent.excludeTools && agent.excludeTools.length > 0) {
-				const excludeRow = details.createDiv({cls: 'sidekick-tools-agent-tools'});
-				excludeRow.createSpan({cls: 'sidekick-tools-tag sidekick-tools-tag-muted', text: 'Excluded:'});
+				const excludeBlock = details.createDiv({cls: 'sidekick-agent-card-block'});
+				excludeBlock.createSpan({cls: 'sidekick-agent-card-block-label', text: 'Excluded built-ins'});
+				const excludeList = excludeBlock.createDiv({cls: 'sidekick-tools-agent-tools'});
 				for (const toolName of agent.excludeTools) {
-					const tag = excludeRow.createSpan({cls: 'sidekick-tools-tag sidekick-tools-tag-muted'});
-					tag.setText(toolName);
+					excludeList.createSpan({cls: 'sidekick-tools-tag sidekick-tools-tag-muted', text: toolName});
 				}
+			}
+
+			// Handoffs
+			if (agent.handoffs && agent.handoffs.length > 0) {
+				const handoffBlock = details.createDiv({cls: 'sidekick-agent-card-block'});
+				handoffBlock.createSpan({cls: 'sidekick-agent-card-block-label', text: 'Handoffs'});
+				const handoffList = handoffBlock.createDiv({cls: 'sidekick-tools-agent-tools'});
+				for (const handoff of agent.handoffs) {
+					const tag = handoffList.createSpan({cls: 'sidekick-tools-tag'});
+					tag.setText(`\u2192 ${handoff.label} (${handoff.agent})`);
+					if (handoff.prompt) tag.setAttribute('title', handoff.prompt);
+				}
+			}
+
+			// Instructions preview
+			if (agent.instructions) {
+				const instrBlock = details.createDiv({cls: 'sidekick-agent-card-block'});
+				instrBlock.createSpan({cls: 'sidekick-agent-card-block-label', text: 'Instructions'});
+				const preview = agent.instructions.length > 400
+					? agent.instructions.slice(0, 400) + '…'
+					: agent.instructions;
+				instrBlock.createDiv({cls: 'sidekick-prompt-card-content', text: preview});
 			}
 		}
 	};
@@ -502,6 +715,7 @@ export function installToolsPanel(ViewClass: {prototype: unknown}): void {
 
 		this.renderMcpServersList();
 		this.renderAgencyServersList();
+		this.renderOilPanel();
 
 		// When a server newly connects, try to discover tools via SDK
 		if (newlyConnected) {
@@ -512,9 +726,21 @@ export function installToolsPanel(ViewClass: {prototype: unknown}): void {
 	proto.refreshMcpToolsList = async function(): Promise<void> {
 		if (this.mcpServers.length === 0 || this.enabledMcpServers.size === 0) return;
 
+		// Build a filtered enabled set that excludes servers with known auth errors
+		// or servers currently waiting for az login to complete.
+		const azLoginPending = (this as unknown as {_azLoginServers?: Set<string>})._azLoginServers;
+		const probableNames = new Set<string>();
+		for (const name of this.enabledMcpServers) {
+			if (azLoginPending?.has(name)) continue;
+			const existing = this.mcpServerStatus.get(name);
+			if (existing?.status === 'error' && (existing.httpStatus === 401 || existing.httpStatus === 403)) continue;
+			probableNames.add(name);
+		}
+		if (probableNames.size === 0) return;
+
 		try {
 			// Enrich Azure-authenticated servers with fresh tokens before probing
-			const enriched = await enrichServersWithAzureAuth(this.mcpServers, this.enabledMcpServers);
+			const enriched = await enrichServersWithAzureAuth(this.mcpServers, probableNames);
 			if (enriched.size > 0) {
 				for (const name of enriched) {
 					const prev = this.mcpServerStatus.get(name);
@@ -526,7 +752,7 @@ export function installToolsPanel(ViewClass: {prototype: unknown}): void {
 				this.renderAgencyServersList();
 			}
 
-			const results = await probeAllMcpServers(this.mcpServers, this.enabledMcpServers);
+			const results = await probeAllMcpServers(this.mcpServers, probableNames);
 
 			for (const result of results) {
 				const existing = this.mcpServerStatus.get(result.serverName);
@@ -539,10 +765,19 @@ export function installToolsPanel(ViewClass: {prototype: unknown}): void {
 				} else if (result.skipped) {
 					// Proxy-only — status tracked from session events + SDK tools.list
 				} else if (result.error) {
-					if (result.httpStatus === 401) {
+					if ((result.httpStatus === 401 || result.httpStatus === 403) && needsAzureAuth(this.mcpServers.find(s => s.name === result.serverName)!)) {
+						clearAzureTokenCache();
+						// Auto-trigger az login and retry
 						const server = this.mcpServers.find(s => s.name === result.serverName);
-						if (server && needsAzureAuth(server)) {
-							clearAzureTokenCache();
+						if (server) {
+							this.mcpServerStatus.set(result.serverName, {
+								status: 'pending',
+								message: 'Azure auth failed — running az login…',
+								tools: existing?.tools,
+							});
+							this.renderMcpServersList();
+							void this.runAzLoginAndRetry(server);
+							continue;
 						}
 					}
 					this.mcpServerStatus.set(result.serverName, {
@@ -581,8 +816,8 @@ export function installToolsPanel(ViewClass: {prototype: unknown}): void {
 				const slashIdx = tool.namespacedName.indexOf('/');
 				if (slashIdx <= 0) continue;
 				const serverName = tool.namespacedName.substring(0, slashIdx);
-				// Only track tools for servers we know about
-				if (!this.enabledMcpServers.has(serverName)) continue;
+				// Track tools for enabled user/agency servers AND the built-in OIL server
+				if (!this.enabledMcpServers.has(serverName) && serverName !== OIL_SERVER_NAME) continue;
 				let list = mcpToolsByServer.get(serverName);
 				if (!list) {
 					list = [];
@@ -611,6 +846,7 @@ export function installToolsPanel(ViewClass: {prototype: unknown}): void {
 			if (updated) {
 				this.renderMcpServersList();
 				this.renderAgencyServersList();
+				this.renderOilPanel();
 			}
 		} catch (e) {
 			debugTrace('discoverToolsViaSdk error', {error: String(e)});
@@ -638,14 +874,17 @@ export function installToolsPanel(ViewClass: {prototype: unknown}): void {
 		});
 		this.renderMcpServersList();
 		this.renderAgencyServersList();
+		this.renderOilPanel();
 	};
 
 	proto.scheduleMcpToolDiscovery = function(): void {
 		// Show pending state immediately for enabled servers that need probing
+		// Skip servers already in error state (auth failures etc) — they need manual refresh
 		let anyPending = false;
 		for (const server of this.mcpServers) {
 			if (!this.enabledMcpServers.has(server.name)) continue;
 			const existing = this.mcpServerStatus.get(server.name);
+			if (existing?.status === 'error') continue;
 			if (!existing || (!existing.tools?.length && existing.status !== 'pending')) {
 				this.mcpServerStatus.set(server.name, {
 					status: 'pending',
@@ -734,6 +973,94 @@ export function installToolsPanel(ViewClass: {prototype: unknown}): void {
 			console.error(`Sidekick: auth refresh failed for ${serverName}:`, err);
 			new Notice(`Auth refresh failed for ${serverName}: ${msg}`);
 			return false;
+		}
+	};
+
+	/**
+	 * Auto-trigger `az login` when an Azure-authenticated HTTP server gets a 401/403,
+	 * then clear the token cache, re-enrich, and re-probe the server.
+	 * Tracks per-server login state to prevent concurrent attempts and skip re-probes.
+	 */
+	proto.runAzLoginAndRetry = async function(server: McpServerEntry): Promise<void> {
+		const self = this as unknown as {_azLoginInProgress?: boolean; _azLoginServers?: Set<string>};
+		if (!self._azLoginServers) self._azLoginServers = new Set();
+
+		// Prevent multiple concurrent az login attempts
+		if (self._azLoginInProgress) {
+			// Still mark this server as login-pending so probes skip it
+			self._azLoginServers.add(server.name);
+			debugTrace('az login already in progress, skipping', {server: server.name});
+			return;
+		}
+		self._azLoginInProgress = true;
+		self._azLoginServers.add(server.name);
+
+		const nodeRequire = (window as unknown as {require?: NodeRequire}).require;
+		const cp = nodeRequire?.('node:child_process') as typeof import('node:child_process') | undefined;
+		const util = nodeRequire?.('node:util') as typeof import('node:util') | undefined;
+		if (!cp || !util) {
+			self._azLoginInProgress = false;
+			self._azLoginServers.delete(server.name);
+			return;
+		}
+		const execFileAsync = util.promisify(cp.execFile);
+
+		const home = process.env['HOME'] || '';
+		const extraDirs = ['/usr/local/bin', '/opt/homebrew/bin'];
+		if (home) extraDirs.push(`${home}/.local/bin`);
+		const searchPath = [...extraDirs, process.env['PATH'] || ''].join(':');
+
+		new Notice('Azure auth required — launching az login…');
+
+		try {
+			await execFileAsync('az', ['login', '--only-show-errors'], {
+				timeout: 120_000,
+				env: {...process.env, PATH: searchPath},
+			});
+
+			new Notice('Azure login succeeded — refreshing token…');
+			clearAzureTokenCache();
+
+			// Re-enrich and re-probe ALL servers that were pending az login
+			const pendingServers = this.mcpServers.filter(
+				(s: McpServerEntry) => self._azLoginServers!.has(s.name)
+			);
+			await enrichServersWithAzureAuth(pendingServers);
+
+			const results = await probeAllMcpServers(pendingServers, new Set(pendingServers.map((s: McpServerEntry) => s.name)));
+			for (const result of results) {
+				if (result.tools.length > 0) {
+					this.mcpServerStatus.set(result.serverName, {
+						status: 'connected',
+						message: 'Authenticated via az login',
+						tools: result.tools,
+					});
+					new Notice(`${result.serverName}: connected with ${result.tools.length} tools`);
+				} else if (result.error) {
+					this.mcpServerStatus.set(result.serverName, {
+						status: 'error',
+						message: result.error,
+						httpStatus: result.httpStatus,
+					});
+					new Notice(`${result.serverName}: ${result.error}`);
+				}
+			}
+		} catch (err: unknown) {
+			const msg = err instanceof Error ? err.message : String(err);
+			debugTrace('az login failed', {error: msg});
+			// Set error without httpStatus so future refreshes will re-attempt
+			for (const name of self._azLoginServers) {
+				this.mcpServerStatus.set(name, {
+					status: 'error',
+					message: `az login failed: ${msg}`,
+				});
+			}
+			new Notice(`az login failed: ${msg}`);
+		} finally {
+			self._azLoginInProgress = false;
+			self._azLoginServers.clear();
+			this.renderMcpServersList();
+			this.renderOilPanel();
 		}
 	};
 }

@@ -1,4 +1,5 @@
 import type {SidekickView} from '../sidekickView';
+import {BUILTIN_COMMAND_DESCRIPTORS} from './builtinCommands';
 
 export function installPromptSlash(ViewClass: {prototype: unknown}): void {
 	const proto = ViewClass.prototype as SidekickView;
@@ -18,8 +19,7 @@ export function installPromptSlash(ViewClass: {prototype: unknown}): void {
 		const query = value.slice(1).toLowerCase();
 
 		// Merge built-in commands with user-defined prompts
-		const ViewClass = this.constructor as typeof import('../sidekickView').SidekickView;
-		const builtinMatches = ViewClass.BUILTIN_COMMANDS
+		const builtinMatches = BUILTIN_COMMAND_DESCRIPTORS
 			.filter(c => c.name.toLowerCase().includes(query))
 			.map(c => ({name: c.name, description: c.description, content: '', isBuiltin: true as const}));
 		const promptMatches = this.prompts
@@ -104,8 +104,7 @@ export function installPromptSlash(ViewClass: {prototype: unknown}): void {
 		const query = value.startsWith('/') ? value.slice(1).toLowerCase() : '';
 
 		// Build merged list matching handlePromptTrigger
-		const ViewClass = this.constructor as typeof import('../sidekickView').SidekickView;
-		const builtinMatches = ViewClass.BUILTIN_COMMANDS
+		const builtinMatches = BUILTIN_COMMAND_DESCRIPTORS
 			.filter(c => c.name.toLowerCase().includes(query))
 			.map(c => ({name: c.name, description: c.description, content: '', isBuiltin: true as const}));
 		const promptMatches = this.prompts

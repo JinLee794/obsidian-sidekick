@@ -6,7 +6,8 @@ export function installContextTracker(ViewClass: {prototype: unknown}): void {
 	proto.getPromptTokenLimit = function(): number {
 		const model = this.getSelectedModelInfo();
 		const limits = model?.capabilities?.limits;
-		return limits?.max_prompt_tokens ?? limits?.max_context_window_tokens ?? 128_000;
+		const raw = limits?.max_prompt_tokens ?? limits?.max_context_window_tokens ?? 0;
+		return raw > 0 ? raw : 128_000;
 	};
 
 	proto.checkContextUsage = function(): void {
@@ -22,7 +23,7 @@ export function installContextTracker(ViewClass: {prototype: unknown}): void {
 		this.contextHintShown = true;
 		const pct = Math.round(ratio * 100);
 		this.addInfoMessage(
-			`Context is ${pct}% full. Use **/new** to start a fresh conversation or **/clear** to reset context.`,
+			`Context is ${pct}% full. Use **/compact** to summarize history, **/new** to start fresh, or **/clear** to reset.`,
 		);
 	};
 }

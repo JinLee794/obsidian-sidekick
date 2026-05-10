@@ -13,6 +13,7 @@ export class Setting {
 	addText() { return this; }
 }
 export function setIcon() {}
+export function addIcon() {}
 export class Component {}
 export class ItemView { constructor(..._args: unknown[]) {} }
 export class WorkspaceLeaf {}

@@ -10,8 +10,8 @@ import {registerBackgroundEvents as registerBgEvents} from './bgEvents';
 declare module '../sidekickView' {
 	interface SidekickView {
 		buildSessionSidebar(parent: HTMLElement): void;
-		initSplitter(): void;
-		loadSessions(): Promise<void>;
+		toggleSidebar(expanded?: boolean): void;
+		loadSessions(retries?: number): Promise<void>;
 		sortSessionList(): void;
 		renderSessionList(): void;
 		renderSessionItem(container: HTMLElement, session: SessionMetadata, opts: {
@@ -46,7 +46,17 @@ export function installSessionSidebar(ViewClass: {prototype: unknown}): void {
 
 	proto.buildSessionSidebar = function (parent: HTMLElement): void {
 		this.sidebarEl = parent.createDiv({cls: 'sidekick-sidebar'});
-		this.sidebarEl.setCssProps({'--sidebar-width': `${this.sidebarWidth}px`});
+		if (this.sidebarExpanded) this.sidebarEl.addClass('is-expanded');
+
+		// Toggle tab — always visible, sits above everything
+		this.sidebarToggleEl = this.sidebarEl.createEl('button', {
+			cls: 'sidekick-sidebar-toggle',
+			attr: {title: 'Toggle session history'},
+		});
+		const toggleIcon = this.sidebarToggleEl.createSpan({cls: 'sidekick-sidebar-toggle-icon'});
+		setIcon(toggleIcon, 'history');
+		this.sidebarToggleEl.createSpan({cls: 'sidekick-sidebar-toggle-label', text: 'History'});
+		this.sidebarToggleEl.addEventListener('click', () => this.toggleSidebar());
 
 		// Header: new session button + filter + sort + search
 		const header = this.sidebarEl.createDiv({cls: 'sidekick-sidebar-header'});
@@ -105,51 +115,25 @@ export function installSessionSidebar(ViewClass: {prototype: unknown}): void {
 
 		// Session list (scrollable)
 		this.sidebarListEl = this.sidebarEl.createDiv({cls: 'sidekick-sidebar-list'});
+
+		// Apply initial collapsed/expanded visibility
+		this.renderSessionList();
 	};
 
-	proto.initSplitter = function (): void {
-		let startX = 0;
-		let startWidth = 0;
-		let dragging = false;
-
-		const onMouseMove = (e: MouseEvent) => {
-			if (!dragging) return;
-			// Sidebar is on the right, so dragging left increases width
-			const dx = startX - e.clientX;
-			const newWidth = Math.max(40, Math.min(300, startWidth + dx));
-			this.sidebarWidth = newWidth;
-			this.sidebarEl.setCssProps({'--sidebar-width': `${newWidth}px`});
-		};
-
-		const onMouseUp = () => {
-			dragging = false;
-			document.removeEventListener('mousemove', onMouseMove);
-			document.removeEventListener('mouseup', onMouseUp);
-			this.splitterEl.removeClass('is-dragging');
-			document.body.removeClass('sidekick-no-select');
-			// Re-render session list once on drag end instead of every mousemove
-			this.renderSessionList();
-		};
-
-		this.splitterEl.addEventListener('mousedown', (e) => {
-			e.preventDefault();
-			dragging = true;
-			startX = e.clientX;
-			startWidth = this.sidebarWidth;
-			this.splitterEl.addClass('is-dragging');
-			document.body.addClass('sidekick-no-select');
-			document.addEventListener('mousemove', onMouseMove);
-			document.addEventListener('mouseup', onMouseUp);
-		});
-
-		this.register(() => {
-			document.removeEventListener('mousemove', onMouseMove);
-			document.removeEventListener('mouseup', onMouseUp);
-		});
+	proto.toggleSidebar = function (expanded?: boolean): void {
+		this.sidebarExpanded = expanded ?? !this.sidebarExpanded;
+		this.sidebarEl.toggleClass('is-expanded', this.sidebarExpanded);
+		this.renderSessionList();
 	};
 
-	proto.loadSessions = async function (): Promise<void> {
-		if (!this.plugin.copilot) return;
+	proto.loadSessions = async function (retries = 5): Promise<void> {
+		if (!this.plugin.copilot) {
+			// Copilot may not be initialized yet on boot — retry with back-off
+			if (retries > 0) {
+				setTimeout(() => void this.loadSessions(retries - 1), 500);
+			}
+			return;
+		}
 		try {
 			this.sessionList = await this.plugin.copilot.listSessions();
 			this.sortSessionList();
@@ -189,7 +173,7 @@ export function installSessionSidebar(ViewClass: {prototype: unknown}): void {
 		if (!this.sidebarListEl) return;
 		this.sidebarListEl.empty();
 
-		const isExpanded = this.sidebarWidth > 80;
+		const isExpanded = this.sidebarExpanded;
 		// Show/hide search and filter/sort/refresh when collapsed
 		if (this.sidebarSearchEl) {
 			this.sidebarSearchEl.toggleClass('is-hidden', !isExpanded);

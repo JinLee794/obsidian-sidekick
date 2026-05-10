@@ -1,7 +1,6 @@
 import {normalizePath, TFile, TFolder} from 'obsidian';
 import type {App} from 'obsidian';
-import type {MCPServerConfig, ModelInfo, MessageOptions, ProviderConfig, SessionConfig, ReasoningEffort, PermissionRequest, CustomAgentConfig, Tool} from '../copilot';
-import {approveAll, defineTool} from '../copilot';
+import type {MCPServerConfig, ModelInfo, MessageOptions, ProviderConfig, SessionConfig, ReasoningEffort, PermissionRequest, PermissionRequestResult, CustomAgentConfig} from '../copilot';
 import type {AgentConfig, McpServerEntry, ChatAttachment} from '../types';
 import type {SidekickView} from '../sidekickView';
 import {getSkillsFolder, getAgentsFolder as getAgentsFolderSetting} from '../settings';
@@ -11,7 +10,6 @@ import {UserInputModal} from '../modals/userInputModal';
 import type {UserInputRequest} from '../modals/userInputModal';
 import {isProxyOnlyServer, isAgencyAvailable, rewriteForAgency} from '../mcpProbe';
 import {debugTrace} from '../debug';
-import type {VaultIndex} from '../vaultIndex';
 
 /**
  * Map MCP server entries to MCPServerConfig objects, filtering by enabled set.
@@ -226,7 +224,8 @@ export function buildProviderConfig(settings: {
 		baseUrl: settings.providerBaseUrl,
 		...(settings.providerApiKey ? {apiKey: resolveEnvRef(settings.providerApiKey)} : {}),
 		...(settings.providerBearerToken ? {bearerToken: resolveEnvRef(settings.providerBearerToken)} : {}),
-		wireApi: settings.providerWireApi,
+		...(settings.providerWireApi === 'completions' || settings.providerWireApi === 'responses'
+			? {wireApi: settings.providerWireApi} : {}),
 	};
 }
 
@@ -285,150 +284,6 @@ export function buildSystemParts(opts: {
 	return parts.length > 0 ? parts.join('\n\n') : undefined;
 }
 
-// ── Custom vault tools (defineTool) ──────────────────────────────
-
-/**
- * Build SDK custom tools that let the agent call back into the Obsidian vault.
- * These are read-only tools — they never modify vault content.
- */
-export function buildVaultTools(app: App, vaultIndex: VaultIndex | null): Tool<unknown>[] {
-	const tools: Tool<unknown>[] = [];
-
-	// vault_search — search notes by query using the vault index pre-filter
-	tools.push(defineTool('vault_search', {
-		description: 'Search for notes in the Obsidian vault by keyword. Returns matching notes ranked by relevance based on filename, tags, headings, aliases, and folder path. Use this to discover relevant notes before reading them.',
-		parameters: {
-			type: 'object',
-			properties: {
-				query: {type: 'string', description: 'Search query (keywords to match against note titles, tags, headings, aliases)'},
-				limit: {type: 'number', description: 'Maximum number of results to return (default: 15)'},
-				folder: {type: 'string', description: 'Optional folder path to scope the search (e.g. "Projects/web")'},
-			},
-			required: ['query'],
-		},
-		handler: async (args: unknown) => {
-			const {query, limit, folder} = args as {query: string; limit?: number; folder?: string};
-			if (!vaultIndex) return {error: 'Vault index not available'};
-			const scopePaths = folder ? [folder] : ['/'];
-			const candidates = vaultIndex.preFilter(query, scopePaths, limit ?? 15);
-			return candidates.map(c => ({
-				path: c.note.path,
-				name: c.note.name,
-				score: c.score,
-				matchReasons: c.matchReasons,
-				tags: c.note.tags,
-				headings: c.note.headings.slice(0, 5),
-				folder: c.note.folder,
-			}));
-		},
-	}) as Tool<unknown>);
-
-	// vault_read_note — read a note's full content by path
-	tools.push(defineTool('vault_read_note', {
-		description: 'Read the full content of a note in the Obsidian vault by its file path. Returns the raw markdown text. Use vault_search first to find the path.',
-		parameters: {
-			type: 'object',
-			properties: {
-				path: {type: 'string', description: 'Vault-relative path to the note (e.g. "Projects/web/README.md")'},
-			},
-			required: ['path'],
-		},
-		handler: async (args: unknown) => {
-			const {path} = args as {path: string};
-			const file = app.vault.getAbstractFileByPath(normalizePath(path));
-			if (!(file instanceof TFile)) return {error: `File not found: ${path}`};
-			const content = await app.vault.cachedRead(file);
-			return {path: file.path, content};
-		},
-	}) as Tool<unknown>);
-
-	// vault_list_folder — list files and subfolders in a vault directory
-	tools.push(defineTool('vault_list_folder', {
-		description: 'List files and subfolders in a vault directory. Returns names, types, and sizes. Useful for exploring vault structure.',
-		parameters: {
-			type: 'object',
-			properties: {
-				path: {type: 'string', description: 'Vault-relative folder path (e.g. "Projects" or "/" for root)'},
-			},
-			required: ['path'],
-		},
-		handler: async (args: unknown) => {
-			const {path: folderPath} = args as {path: string};
-			const normalized = folderPath === '/' ? '/' : normalizePath(folderPath);
-			const folder = normalized === '/'
-				? app.vault.getRoot()
-				: app.vault.getAbstractFileByPath(normalized);
-			if (!(folder instanceof TFolder)) return {error: `Folder not found: ${folderPath}`};
-			const items = folder.children.map(child => {
-				if (child instanceof TFile) {
-					return {name: child.name, type: 'file' as const, size: child.stat.size};
-				}
-				return {name: child.name, type: 'folder' as const};
-			});
-			items.sort((a, b) => {
-				if (a.type !== b.type) return a.type === 'folder' ? -1 : 1;
-				return a.name.localeCompare(b.name);
-			});
-			return {path: folderPath, items};
-		},
-	}) as Tool<unknown>);
-
-	// vault_note_metadata — get metadata for a specific note without reading full content
-	tools.push(defineTool('vault_note_metadata', {
-		description: 'Get metadata for a note including tags, aliases, headings, links, frontmatter properties, and modification time. Lighter than reading full content.',
-		parameters: {
-			type: 'object',
-			properties: {
-				path: {type: 'string', description: 'Vault-relative path to the note'},
-			},
-			required: ['path'],
-		},
-		handler: async (args: unknown) => {
-			const {path} = args as {path: string};
-			const file = app.vault.getAbstractFileByPath(normalizePath(path));
-			if (!(file instanceof TFile)) return {error: `File not found: ${path}`};
-			if (!vaultIndex) return {error: 'Vault index not available'};
-			const meta = vaultIndex.getNoteMetadata(file);
-			return {
-				path: meta.path,
-				name: meta.name,
-				folder: meta.folder,
-				tags: meta.tags,
-				aliases: meta.aliases,
-				headings: meta.headings,
-				links: meta.links,
-				backlinks: meta.backlinks,
-				frontmatter: meta.frontmatter,
-				mtime: meta.mtime,
-				size: meta.size,
-			};
-		},
-	}) as Tool<unknown>);
-
-	return tools;
-}
-
-// ── Session hooks ────────────────────────────────────────────────
-
-/**
- * Build session hooks for error recovery and lifecycle logging.
- */
-export function buildHooks(): NonNullable<SessionConfig['hooks']> {
-	return {
-		onErrorOccurred: async (input: {error: string; errorContext: string; recoverable: boolean}) => {
-			debugTrace('hook:onErrorOccurred', {
-				error: input.error,
-				errorContext: input.errorContext,
-				recoverable: input.recoverable,
-			});
-			if (input.recoverable) {
-				return {errorHandling: 'retry' as const, retryCount: 2};
-			}
-			return undefined;
-		},
-	};
-}
-
 // ── Mixin: methods installed onto SidekickView.prototype ─────────
 
 export function installSessionConfigMixin(ViewClass: {prototype: unknown}): void {
@@ -475,9 +330,9 @@ export function installSessionConfigMixin(ViewClass: {prototype: unknown}): void
 			: undefined;
 
 		// Permission handler
-		const permissionHandler = (request: PermissionRequest) => {
+		const permissionHandler = (request: PermissionRequest): PermissionRequestResult | Promise<PermissionRequestResult> => {
 			if (this.plugin.settings.toolApproval === 'allow') {
-				return approveAll(request, {sessionId: ''});
+				return {kind: 'approve-once'};
 			}
 			const modal = new ToolApprovalModal(this.app, request);
 			modal.open();
@@ -510,12 +365,6 @@ export function installSessionConfigMixin(ViewClass: {prototype: unknown}): void
 
 		const excludedTools = buildExcludedTools(selectedAgent);
 
-		// Custom vault tools — give the agent direct read-only access to the vault
-		const vaultTools = buildVaultTools(this.app, this.vaultIndex);
-
-		// Session hooks — error recovery for transient failures
-		const hooks = buildHooks();
-
 		debugTrace('buildSessionConfig', {
 			mcpServerCount: mcpServerNames.length,
 			mcpServerNames,
@@ -532,7 +381,6 @@ export function installSessionConfigMixin(ViewClass: {prototype: unknown}): void
 			skipSkills: !!opts.skipSkills,
 			selectedAgent: opts.selectedAgentName,
 			excludedTools,
-			vaultToolCount: vaultTools.length,
 		});
 
 		return {
@@ -540,9 +388,8 @@ export function installSessionConfigMixin(ViewClass: {prototype: unknown}): void
 			streaming: providerPreset !== 'foundry-local',
 			onPermissionRequest: permissionHandler,
 			onUserInputRequest: userInputHandler,
-			hooks,
 			workingDirectory: this.getWorkingDirectory(),
-			...(vaultTools.length > 0 ? {tools: vaultTools} : {}),
+			commands: this.getBuiltinCommands(),
 			...(reasoningEffort !== '' ? {reasoningEffort: reasoningEffort as ReasoningEffort} : {}),
 			...(provider ? {provider} : {}),
 			...(mcpServerNames.length > 0 ? {mcpServers} : {}),
@@ -551,6 +398,11 @@ export function installSessionConfigMixin(ViewClass: {prototype: unknown}): void
 			...(disabledSkills.length > 0 ? {disabledSkills} : {}),
 			...(excludedTools.length > 0 ? {excludedTools} : {}),
 			...(finalSystemContent ? {systemMessage: {mode: 'append' as const, content: finalSystemContent}} : {}),
+			infiniteSessions: {
+				enabled: true,
+				backgroundCompactionThreshold: 0.8,
+				bufferExhaustionThreshold: 0.95,
+			},
 		};
 	};
 

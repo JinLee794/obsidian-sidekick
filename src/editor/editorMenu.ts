@@ -1,7 +1,6 @@
 import {Editor, EventRef, MarkdownView, Menu, Modal, Notice, TextComponent, TFile, TFolder, normalizePath} from 'obsidian';
 import type {EditorView} from '@codemirror/view';
 import type SidekickPlugin from '../main';
-import {approveAll} from '../copilot';
 import type {PermissionRequest, PermissionRequestResult, UserInputRequest, UserInputResponse} from '../copilot';
 import {setFetching, triggerComplete} from './ghostText';
 import {SIDEKICK_VIEW_TYPE, SidekickView} from '../sidekickView';
@@ -161,11 +160,6 @@ function buildFolderMenu(menu: Menu, plugin: SidekickPlugin, folder: TFolder): v
 
 		submenu.addSeparator();
 
-		submenu.addItem((si) =>
-			si.setTitle('Semantic search')
-				.setIcon('search')
-				.onClick(() => void openSidekickSearchWithScope(plugin, folder.path)),
-		);
 		submenu.addItem((si) =>
 			si.setTitle('Chat with sidekick')
 				.setIcon('brain')
@@ -507,9 +501,9 @@ async function runActionPrompt(
 	if (!plugin.copilot) return null;
 
 	// Build permission handler that respects the plugin's toolApproval setting
-	const permissionHandler = (request: PermissionRequest) => {
+	const permissionHandler = (request: PermissionRequest): PermissionRequestResult | Promise<PermissionRequestResult> => {
 			if (plugin.settings.toolApproval === 'allow') {
-				return approveAll(request, {sessionId: ''});
+				return {kind: 'approve-once'};
 			}
 			// For 'ask' mode, show a simple confirmation modal
 			return new Promise<PermissionRequestResult>((resolve) => {
@@ -520,8 +514,8 @@ async function runActionPrompt(
 				const btnRow = modal.contentEl.createDiv({cls: 'modal-button-container'});
 				const allowBtn = btnRow.createEl('button', {text: 'Allow', cls: 'mod-cta'});
 				const denyBtn = btnRow.createEl('button', {text: 'Deny'});
-				allowBtn.addEventListener('click', () => { modal.close(); resolve({kind: 'approved'}); });
-				denyBtn.addEventListener('click', () => { modal.close(); resolve({kind: 'denied-interactively-by-user'}); });
+				allowBtn.addEventListener('click', () => { modal.close(); resolve({kind: 'approve-once'}); });
+				denyBtn.addEventListener('click', () => { modal.close(); resolve({kind: 'reject'}); });
 				modal.open();
 			});
 		};
@@ -901,18 +895,7 @@ async function openSidekickViewWithScope(plugin: SidekickPlugin, folderPath: str
 	}
 }
 
-/** Open the Sidekick search tab scoped to a specific folder. */
-async function openSidekickSearchWithScope(plugin: SidekickPlugin, folderPath: string): Promise<void> {
-	await plugin.activateView();
-	const leaves = plugin.app.workspace.getLeavesOfType(SIDEKICK_VIEW_TYPE);
-	if (leaves.length > 0 && leaves[0]) {
-		const view = leaves[0].view as SidekickView;
-		view.openSearchWithScope(folderPath);
-	}
-}
-
-/**
- * Populate a menu with Sidekick actions. Used by both the context menu
+/** Populate a menu with Sidekick actions. Used by both the context menu
  * and the gutter brain-button to keep behaviour consistent.
  *
  * @param menu      The Obsidian Menu (or submenu) to populate.

@@ -1,7 +1,6 @@
 import {Menu, Notice, TFile, normalizePath, setIcon} from 'obsidian';
 import type {SidekickView} from '../sidekickView';
-import type {SessionConfig, SessionMetadata, PermissionRequest} from '../copilot';
-import {approveAll} from '../copilot';
+import type {SessionConfig, SessionMetadata, PermissionRequest, PermissionRequestResult} from '../copilot';
 import type {AgentConfig} from '../types';
 import {getSkillsFolder} from '../settings';
 import {FolderTreeModal, ToolApprovalModal} from '../modals';
@@ -336,9 +335,9 @@ export function installSearchPanel(ViewClass: { prototype: unknown }): void {
 		});
 
 		// Permission handler
-		const permissionHandler = (request: PermissionRequest) => {
+		const permissionHandler = (request: PermissionRequest): PermissionRequestResult | Promise<PermissionRequestResult> => {
 			if (this.plugin.settings.toolApproval === 'allow') {
-				return approveAll(request, {sessionId: ''});
+				return {kind: 'approve-once'};
 			}
 			const modal = new ToolApprovalModal(this.app, request);
 			modal.open();
@@ -482,9 +481,9 @@ export function installSearchPanel(ViewClass: { prototype: unknown }): void {
 	};
 
 	proto.buildBasicSearchSessionConfig = function (this: SidekickView): SessionConfig {
-		const permissionHandler = (request: PermissionRequest) => {
+		const permissionHandler = (request: PermissionRequest): PermissionRequestResult | Promise<PermissionRequestResult> => {
 			if (this.plugin.settings.toolApproval === 'allow') {
-				return approveAll(request, {sessionId: ''});
+				return {kind: 'approve-once'};
 			}
 			const modal = new ToolApprovalModal(this.app, request);
 			modal.open();

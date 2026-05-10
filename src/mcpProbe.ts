@@ -258,9 +258,12 @@ export function isAgencyService(server: McpServerEntry): boolean {
  * Those servers require VS Code Copilot's OAuth client and are treated as proxy-only.
  *
  * Servers can override the resource via `"azureResource": "https://..."` in mcp.json.
+ *
+ * Note: api.fabric.microsoft.com is NOT here because it only authorises specific
+ * OAuth clients (e.g. Copilot CLI). The Azure CLI client is rejected with
+ * FeatureNotAvailable. Let the Copilot CLI handle auth via its own OAuth flow.
  */
 const AZURE_AUTH_PATTERNS: Array<{pattern: RegExp; resource: string}> = [
-	{pattern: /api\.fabric\.microsoft\.com/i, resource: 'https://api.fabric.microsoft.com'},
 ];
 
 /** Cached Azure CLI tokens keyed by resource URI. */

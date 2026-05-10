@@ -39,21 +39,21 @@ export class ToolApprovalModal extends Modal {
 		const allowBtn = btnRow.createEl('button', {cls: 'mod-cta', text: 'Allow'});
 		allowBtn.addEventListener('click', () => {
 			this.resolved = true;
-			this.resolve({kind: 'approved'});
+			this.resolve({kind: 'approve-once'});
 			this.close();
 		});
 
 		const denyBtn = btnRow.createEl('button', {text: 'Deny'});
 		denyBtn.addEventListener('click', () => {
 			this.resolved = true;
-			this.resolve({kind: 'denied-interactively-by-user'});
+			this.resolve({kind: 'reject'});
 			this.close();
 		});
 	}
 
 	onClose(): void {
 		if (!this.resolved) {
-			this.resolve({kind: 'denied-interactively-by-user'});
+			this.resolve({kind: 'reject'});
 		}
 	}
 }

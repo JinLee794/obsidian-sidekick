@@ -7,8 +7,7 @@ import {normalizePath, Notice} from 'obsidian';
 import type SidekickPlugin from '../main';
 import type {SidekickView} from '../sidekickView';
 import {SIDEKICK_VIEW_TYPE} from '../sidekickView';
-import type {SessionConfig, CopilotSession, PermissionRequest, CustomAgentConfig} from '../copilot';
-import {approveAll} from '../copilot';
+import type {SessionConfig, CopilotSession, PermissionRequest, PermissionRequestResult, CustomAgentConfig} from '../copilot';
 import type {AgentConfig, SkillInfo, McpServerEntry} from '../types';
 import {getSkillsFolder, getMcpInputValue} from '../settings';
 import {loadAgents, loadSkills, loadMcpServers, loadAgencyConfig, loadInstructions} from '../configLoader';
@@ -336,14 +335,8 @@ export class TelegramBotService {
 		const models = this.getAvailableModels();
 		const model = resolveModelForAgent(agent, models, undefined);
 
-		// Permission handler — auto-approve for bot sessions
-		const permissionHandler = (request: PermissionRequest) => {
-			if (this.plugin.settings.toolApproval === 'allow') {
-				return approveAll(request, {sessionId: ''});
-			}
-			// For bot sessions, auto-approve since there's no UI to ask
-			return approveAll(request, {sessionId: ''});
-		};
+		// Permission handler — auto-approve for bot sessions (no UI to ask)
+		const permissionHandler = (): PermissionRequestResult => ({kind: 'approve-once'});
 
 		// BYOK provider
 		const provider = buildProviderConfig(this.plugin.settings);

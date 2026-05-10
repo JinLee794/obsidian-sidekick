@@ -7,6 +7,7 @@ import {EditModal} from '../modals/editModal';
 import {AgentEditorModal} from '../modals/agentEditorModal';
 import type {AgentEditorContext} from '../modals/agentEditorModal';
 import {isAgencyService} from '../mcpProbe';
+import {OIL_SERVER_NAME} from './toolsPanel';
 import {setDebugEnabled} from '../debug';
 
 declare module '../sidekickView' {
@@ -315,7 +316,9 @@ export function installConfigToolbar(ViewClass: { prototype: unknown }): void {
 			const allowed = new Set(agent.tools);
 			this.enabledMcpServers = new Set(
 				this.mcpServers.filter((s: {name: string; config: Record<string, unknown>}) =>
-					isAgencyService(s) ? agencyDefaults.has(s.name) : allowed.has(s.name)
+					s.name === OIL_SERVER_NAME ? true
+					: isAgencyService(s) ? agencyDefaults.has(s.name)
+					: allowed.has(s.name)
 				).map((s: {name: string}) => s.name)
 			);
 		} else {

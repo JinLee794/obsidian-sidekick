@@ -1,4 +1,4 @@
-import {Plugin, FileSystemAdapter, Notice} from 'obsidian';
+import {Plugin, FileSystemAdapter, Notice, setIcon} from 'obsidian';
 import {DEFAULT_SETTINGS, SidekickSettings, SidekickSettingTab, SECURE_FIELDS, loadSecureField, saveSecureField} from "./settings";
 import {CopilotService, resolveGhToken} from "./copilot";
 import {resolveEnvRef, purgeAllSecrets} from "./secureStorage";
@@ -6,21 +6,31 @@ import {SidekickView, SIDEKICK_VIEW_TYPE} from "./sidekickView";
 import {registerEditorMenu, registerFileMenu} from './editor/editorMenu';
 import {buildGhostTextExtension} from './editor/ghostText';
 import {TelegramBotService} from './bots';
+import {registerSidekickIcon, DEFAULT_ICON_NAME} from './sidekickIcon';
 
 export default class SidekickPlugin extends Plugin {
 	settings!: SidekickSettings;
 	copilot: CopilotService | null = null;
 	telegramBot: TelegramBotService | null = null;
+	/** Icon name currently in use (Lucide id or registered custom id). */
+	activeIconName: string = DEFAULT_ICON_NAME;
+	private ribbonIconEl: HTMLElement | null = null;
 
 	async onload() {
 		await this.loadSettings();
 		this.addSettingTab(new SidekickSettingTab(this.app, this));
 
+		// Register the active icon (Lucide id or custom uploaded PNG)
+		this.activeIconName = registerSidekickIcon(
+			this.settings.sidekickIcon || DEFAULT_ICON_NAME,
+			this.settings.sidekickCustomIcon || '',
+		);
+
 		// Register the Sidekick chat view
 		this.registerView(SIDEKICK_VIEW_TYPE, (leaf) => new SidekickView(leaf, this));
 
 		// Ribbon icon to open view
-		this.addRibbonIcon('brain', 'Open sidekick', () => void this.activateView());
+		this.ribbonIconEl = this.addRibbonIcon(this.activeIconName, 'Open sidekick', () => void this.activateView());
 
 		// Command to open view
 		this.addCommand({
@@ -135,6 +145,26 @@ export default class SidekickPlugin extends Plugin {
 		if (leaf) {
 			await leaf.setViewState({type: SIDEKICK_VIEW_TYPE, active: true});
 			void this.app.workspace.revealLeaf(leaf);
+		}
+	}
+
+	/**
+	 * Re-register the icon and refresh every place it appears: the ribbon
+	 * button, any open Sidekick view tabs, and the welcome screen.
+	 */
+	applyIcon(): void {
+		this.activeIconName = registerSidekickIcon(
+			this.settings.sidekickIcon || DEFAULT_ICON_NAME,
+			this.settings.sidekickCustomIcon || '',
+		);
+		if (this.ribbonIconEl) {
+			setIcon(this.ribbonIconEl, this.activeIconName);
+		}
+		for (const leaf of this.app.workspace.getLeavesOfType(SIDEKICK_VIEW_TYPE)) {
+			const tabIconEl = (leaf as unknown as {tabHeaderInnerIconEl?: HTMLElement}).tabHeaderInnerIconEl;
+			if (tabIconEl) setIcon(tabIconEl, this.activeIconName);
+			const view = leaf.view;
+			if (view instanceof SidekickView) view.refreshIcon();
 		}
 	}
 

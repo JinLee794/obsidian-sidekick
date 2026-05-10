@@ -12,7 +12,6 @@ import {
 	Modal,
 } from 'obsidian';
 import type SidekickPlugin from './main';
-import {approveAll} from './copilot';
 import type {
 	CopilotSession,
 	SessionConfig,
@@ -21,6 +20,7 @@ import type {
 	ModelInfo,
 	MessageOptions,
 	PermissionRequest,
+	PermissionRequestResult,
 	ReasoningEffort,
 } from './copilot';
 import type {AgentConfig, SkillInfo, McpServerEntry, McpAuthConfig, McpInputVariable, McpToolInfo, PromptConfig, TriggerConfig, ChatMessage, ChatAttachment, SelectionInfo, ContextSuggestion, AgencyConfig} from './types';
@@ -127,13 +127,13 @@ export class SidekickView extends ItemView {
 	sessionList: import('./copilot').SessionMetadata[] = [];
 	sessionNames: Record<string, string> = {};
 	currentSessionId: string | null = null;
-	sidebarWidth = 40;
+	sidebarExpanded = false;
 	sessionFilter = '';
 	sessionTypeFilter = new Set<'chat' | 'inline' | 'trigger' | 'search' | 'other'>(['chat', 'trigger']);
 	sessionSort: 'modified' | 'created' | 'name' = 'modified';
 
 	// ── Tab state ────────────────────────────────────────────────
-	activeTab: 'chat' | 'triggers' | 'search' | 'tools' | 'agency' | 'agents' = 'chat';
+	activeTab: 'chat' | 'triggers' | 'prompts' | 'skills' | 'tools' | 'agency' | 'agents' = 'chat';
 
 	// ── Triggers panel state ─────────────────────────────────────
 	triggerHistoryFilter = '';
@@ -169,15 +169,27 @@ export class SidekickView extends ItemView {
 	// ── DOM refs ─────────────────────────────────────────────────
 	mainEl!: HTMLElement;
 	tabBarEl!: HTMLElement;
+	tabSubBarEl!: HTMLElement;
+	tabSubScrollEl!: HTMLElement;
+	tabGroups: ReadonlyArray<{
+		id: 'workspace' | 'library' | 'connections';
+		icon: string;
+		label: string;
+		tabs: ReadonlyArray<{id: 'chat' | 'triggers' | 'prompts' | 'skills' | 'tools' | 'agency' | 'agents'; icon: string; label: string}>;
+	}> | null = null;
 	chatPanelEl!: HTMLElement;
 	triggersPanelEl!: HTMLElement;
-	searchPanelEl!: HTMLElement;
 	toolsPanelEl!: HTMLElement;
 	toolsMcpListEl!: HTMLElement;
+	toolsOilListEl!: HTMLElement;
 	agencyPanelEl!: HTMLElement;
 	toolsAgencyListEl!: HTMLElement;
 	agentsPanelEl!: HTMLElement;
 	toolsAgentListEl!: HTMLElement;
+	promptsPanelEl!: HTMLElement;
+	promptsListEl!: HTMLElement;
+	skillsPanelEl!: HTMLElement;
+	skillsListEl!: HTMLElement;
 	triggerHistoryListEl!: HTMLElement;
 	triggerConfigListEl!: HTMLElement;
 	chatContainer!: HTMLElement;
@@ -216,18 +228,10 @@ export class SidekickView extends ItemView {
 	agentMentionStart = -1;
 
 	// ── Built-in slash commands ─────────────────────────────────
-	static readonly BUILTIN_COMMANDS: {name: string; description: string}[] = [
-		{name: 'clear', description: 'Clear conversation and start fresh'},
-		{name: 'new', description: 'Start a new conversation (keeps history in sidebar)'},
-		{name: 'help', description: 'Show available commands, agents, and prompts'},
-		{name: 'agents', description: 'List available agents'},
-		{name: 'models', description: 'List available models'},
-		{name: 'model', description: 'Switch model (e.g. /model gpt-4o)'},
-		{name: 'agent', description: 'Switch agent (e.g. /agent coder)'},
-		{name: 'trigger-debug', description: 'Show trigger diagnostic info'},
-		{name: 'tasks', description: 'Show active and recent tasks'},
-		{name: 'reference', description: 'Show frontmatter property reference for agents, prompts, triggers, and skills'},
-	];
+	// Definitions live in src/view/builtinCommands.ts (BUILTIN_COMMAND_DESCRIPTORS
+	// + buildBuiltinCommands). Pulled into each SessionConfig via this.getBuiltinCommands()
+	// so the SDK is aware of them and any agent that calls them triggers the
+	// same handler used by the Obsidian input fast path.
 
 	// ── Session sidebar DOM refs ─────────────────────────────────
 	sidebarEl!: HTMLElement;
@@ -237,7 +241,7 @@ export class SidekickView extends ItemView {
 	sidebarSortEl!: HTMLButtonElement;
 	sidebarRefreshEl!: HTMLButtonElement;
 	sidebarDeleteEl!: HTMLButtonElement;
-	splitterEl!: HTMLElement;
+	sidebarToggleEl!: HTMLButtonElement;
 
 	eventUnsubscribers: (() => void)[] = [];
 
@@ -253,7 +257,7 @@ export class SidekickView extends ItemView {
 		return 'Sidekick';
 	}
 	getIcon(): string {
-		return 'brain';
+		return this.plugin.activeIconName || 'brain';
 	}
 
 	// ── Lifecycle ────────────────────────────────────────────────
@@ -337,9 +341,7 @@ export class SidekickView extends ItemView {
 		// Config toolbar (agents, models, skills, tools, action buttons)
 		this.buildConfigToolbar(bottom);
 
-		// Splitter + session sidebar inside chat panel
-		this.splitterEl = this.chatPanelEl.createDiv({cls: 'sidekick-splitter'});
-		this.initSplitter();
+		// Session sidebar inside chat panel
 		this.buildSessionSidebar(this.chatPanelEl);
 
 		// ── Triggers panel ────────────────────────────────────
@@ -350,8 +352,17 @@ export class SidekickView extends ItemView {
 		this.searchPanelEl = this.mainEl.createDiv({cls: 'sidekick-tab-panel sidekick-tab-panel-search is-hidden'});
 		this.buildSearchPanel(this.searchPanelEl);
 
+		// ── Prompts panel ────────────────────────────────────
+		this.promptsPanelEl = this.mainEl.createDiv({cls: 'sidekick-tab-panel sidekick-tab-panel-prompts is-hidden'});
+		this.buildPromptsPanel(this.promptsPanelEl);
+
+		// ── Skills panel ─────────────────────────────────────
+		this.skillsPanelEl = this.mainEl.createDiv({cls: 'sidekick-tab-panel sidekick-tab-panel-skills is-hidden'});
+		this.buildSkillsPanel(this.skillsPanelEl);
+
 		// ── Tools panel (MCP servers only) ───────────────────
 		this.toolsPanelEl = this.mainEl.createDiv({cls: 'sidekick-tab-panel sidekick-tab-panel-tools is-hidden'});
+		this.buildOilPanel(this.toolsPanelEl);
 		this.buildToolsPanel(this.toolsPanelEl);
 
 		// ── Agency panel ─────────────────────────────────────
@@ -365,39 +376,77 @@ export class SidekickView extends ItemView {
 
 	buildTabBar(parent: HTMLElement): void {
 		this.tabBarEl = parent.createDiv({cls: 'sidekick-tab-bar'});
-		const tabs: {id: 'chat' | 'triggers' | 'search' | 'tools' | 'agency' | 'agents'; icon: string; label: string}[] = [
-			{id: 'chat', icon: 'message-square', label: 'Chat'},
-			{id: 'triggers', icon: 'zap', label: 'Triggers'},
-			{id: 'search', icon: 'search', label: 'Search'},
-			{id: 'tools', icon: 'plug', label: 'Tools'},
-			{id: 'agency', icon: 'building-2', label: 'Agency'},
-			{id: 'agents', icon: 'bot', label: 'Agents'},
+
+		// ── Tab definitions, grouped by category ─────────────
+		type TabId = 'chat' | 'triggers' | 'prompts' | 'skills' | 'tools' | 'agency' | 'agents';
+		type TabDef = {id: TabId; icon: string; label: string};
+		type GroupDef = {id: 'workspace' | 'library' | 'connections'; icon: string; label: string; tabs: TabDef[]};
+
+		const groups: GroupDef[] = [
+			{
+				id: 'workspace',
+				icon: 'layout-dashboard',
+				label: 'Workspace',
+				tabs: [
+					{id: 'chat', icon: 'message-square', label: 'Chat'},
+					{id: 'triggers', icon: 'zap', label: 'Triggers'},
+				],
+			},
+			{
+				id: 'library',
+				icon: 'library',
+				label: 'Library',
+				tabs: [
+					{id: 'agents', icon: 'bot', label: 'Agents'},
+					{id: 'skills', icon: 'sparkles', label: 'Skills'},
+					{id: 'prompts', icon: 'file-text', label: 'Prompts'},
+				],
+			},
+			{
+				id: 'connections',
+				icon: 'plug',
+				label: 'Connections',
+				tabs: [
+					{id: 'tools', icon: 'plug', label: 'Tools'},
+					{id: 'agency', icon: 'building-2', label: 'Agency'},
+				],
+			},
 		];
 
-		// Inner scroll container — clips overflow without shifting layout
-		const tabsScroll = this.tabBarEl.createDiv({cls: 'sidekick-tabs-scroll'});
+		// Cache for switchTab to read
+		this.tabGroups = groups;
 
-		for (const tab of tabs) {
-			const btn = tabsScroll.createDiv({cls: 'sidekick-tab' + (tab.id === this.activeTab ? ' is-active' : '')});
-			btn.dataset.tab = tab.id;
-			// Hide agency tab when disabled in settings
-			if (tab.id === 'agency' && !this.plugin.settings.agencyEnabled) {
-				btn.addClass('is-hidden');
-			}
-			const iconEl = btn.createSpan({cls: 'sidekick-tab-icon'});
-			setIcon(iconEl, tab.icon);
-			btn.createSpan({cls: 'sidekick-tab-label', text: tab.label});
-			btn.addEventListener('click', () => this.switchTab(tab.id));
+		const findGroup = (tabId: TabId): GroupDef =>
+			groups.find(g => g.tabs.some(t => t.id === tabId)) ?? groups[0]!;
+
+		// ── Top row: group selector ──────────────────────────
+		const groupRow = this.tabBarEl.createDiv({cls: 'sidekick-tab-groups'});
+		for (const group of groups) {
+			const groupBtn = groupRow.createDiv({cls: 'sidekick-tab-group'});
+			groupBtn.dataset.group = group.id;
+			const iconEl = groupBtn.createSpan({cls: 'sidekick-tab-icon'});
+			setIcon(iconEl, group.icon);
+			groupBtn.createSpan({cls: 'sidekick-tab-label', text: group.label});
+			groupBtn.addEventListener('click', () => {
+				// Switch to first visible tab in the group
+				const firstAvailable = group.tabs.find(t => !(t.id === 'agency' && !this.plugin.settings.agencyEnabled));
+				if (firstAvailable) this.switchTab(firstAvailable.id);
+			});
 		}
 
-		// Overflow button — always in layout (uses visibility, not display) to avoid
-		// triggering ResizeObserver loops. Hidden via CSS class when not needed.
-		const overflowBtn = this.tabBarEl.createDiv({cls: 'sidekick-tab-overflow sidekick-tab-overflow-hidden'});
+		// ── Bottom row: sub-tabs for the active group ────────
+		this.tabSubBarEl = this.tabBarEl.createDiv({cls: 'sidekick-tab-subbar'});
+		const tabsScroll = this.tabSubBarEl.createDiv({cls: 'sidekick-tabs-scroll'});
+		this.tabSubScrollEl = tabsScroll;
+
+		// Overflow button — kept in layout via visibility for ResizeObserver stability
+		const overflowBtn = this.tabSubBarEl.createDiv({cls: 'sidekick-tab-overflow sidekick-tab-overflow-hidden'});
 		setIcon(overflowBtn, 'more-horizontal');
 		overflowBtn.setAttribute('title', 'More tabs');
 		overflowBtn.addEventListener('click', (e: MouseEvent) => {
 			const menu = new Menu();
-			for (const tab of tabs) {
+			const activeGroup = findGroup(this.activeTab);
+			for (const tab of activeGroup.tabs) {
 				if (tab.id === 'agency' && !this.plugin.settings.agencyEnabled) continue;
 				menu.addItem(item => item
 					.setTitle(tab.label)
@@ -408,8 +457,13 @@ export class SidekickView extends ItemView {
 			menu.showAtMouseEvent(e);
 		});
 
-		// Observe the PARENT (sidekick-main), not the tab bar itself,
-		// so DOM mutations inside the tab bar don't retrigger the observer.
+		// Initial render of sub-tabs for current active tab's group
+		this.renderSubTabs();
+
+		// Highlight active group + tab
+		this.updateTabBarActiveState();
+
+		// ResizeObserver — track overflow on the sub-bar
 		const observer = new ResizeObserver(() => {
 			const hasOverflow = tabsScroll.scrollWidth > tabsScroll.clientWidth + 2;
 			overflowBtn.toggleClass('sidekick-tab-overflow-hidden', !hasOverflow);
@@ -418,32 +472,80 @@ export class SidekickView extends ItemView {
 		this.register(() => observer.disconnect());
 	}
 
-	switchTab(tab: 'chat' | 'triggers' | 'search' | 'tools' | 'agency' | 'agents'): void {
+	/** Re-render the sub-tab row for the currently active tab's group. */
+	renderSubTabs(): void {
+		if (!this.tabSubScrollEl || !this.tabGroups) return;
+		this.tabSubScrollEl.empty();
+		const activeGroup = this.tabGroups.find(g => g.tabs.some(t => t.id === this.activeTab)) ?? this.tabGroups[0];
+		if (!activeGroup) return;
+		for (const tab of activeGroup.tabs) {
+			const btn = this.tabSubScrollEl.createDiv({cls: 'sidekick-tab' + (tab.id === this.activeTab ? ' is-active' : '')});
+			btn.dataset.tab = tab.id;
+			if (tab.id === 'agency' && !this.plugin.settings.agencyEnabled) {
+				btn.addClass('is-hidden');
+			}
+			const iconEl = btn.createSpan({cls: 'sidekick-tab-icon'});
+			setIcon(iconEl, tab.icon);
+			btn.createSpan({cls: 'sidekick-tab-label', text: tab.label});
+			btn.addEventListener('click', () => this.switchTab(tab.id));
+		}
+	}
+
+	/** Update active state on group row and sub-tab row based on this.activeTab. */
+	updateTabBarActiveState(): void {
+		if (!this.tabGroups) return;
+		const activeGroup = this.tabGroups.find(g => g.tabs.some(t => t.id === this.activeTab));
+		this.tabBarEl.querySelectorAll('.sidekick-tab-group').forEach(el => {
+			el.toggleClass('is-active', (el as HTMLElement).dataset.group === activeGroup?.id);
+		});
+		this.tabBarEl.querySelectorAll('.sidekick-tab').forEach(el => {
+			el.toggleClass('is-active', (el as HTMLElement).dataset.tab === this.activeTab);
+		});
+	}
+
+	switchTab(tab: 'chat' | 'triggers' | 'prompts' | 'skills' | 'tools' | 'agency' | 'agents'): void {
+		const groupChanged = this.tabGroups
+			? this.tabGroups.find(g => g.tabs.some(t => t.id === this.activeTab))?.id
+				!== this.tabGroups.find(g => g.tabs.some(t => t.id === tab))?.id
+			: false;
 		if (tab === this.activeTab) return;
 		this.activeTab = tab;
 
-		// Update tab bar active state
-		this.tabBarEl.querySelectorAll('.sidekick-tab').forEach(el => {
-			el.toggleClass('is-active', (el as HTMLElement).dataset.tab === tab);
-		});
+		// If we crossed group boundaries, rebuild the sub-tab row; otherwise just toggle active state.
+		if (groupChanged) {
+			this.renderSubTabs();
+		}
+		this.updateTabBarActiveState();
 
 		// Show/hide panels
 		this.chatPanelEl.toggleClass('is-hidden', tab !== 'chat');
 		this.triggersPanelEl.toggleClass('is-hidden', tab !== 'triggers');
-		this.searchPanelEl.toggleClass('is-hidden', tab !== 'search');
+		this.promptsPanelEl.toggleClass('is-hidden', tab !== 'prompts');
+		this.skillsPanelEl.toggleClass('is-hidden', tab !== 'skills');
 		this.toolsPanelEl.toggleClass('is-hidden', tab !== 'tools');
 		this.agencyPanelEl.toggleClass('is-hidden', tab !== 'agency');
 		this.agentsPanelEl.toggleClass('is-hidden', tab !== 'agents');
 
 		// Refresh panel content when switching to it
+		if (tab === 'prompts') {
+			this.renderPromptsList();
+		}
+		if (tab === 'skills') {
+			this.renderSkillsPanelList();
+		}
 		if (tab === 'tools' || tab === 'agency') {
-			if (tab === 'tools') this.renderMcpServersList();
+			if (tab === 'tools') {
+				this.renderOilPanel();
+				this.renderMcpServersList();
+			}
 			if (tab === 'agency') this.renderAgencyServersList();
-			// Probe servers that haven't been discovered yet
+			// Probe servers that haven't been discovered yet (skip errors — they need auth or manual refresh)
 			const anyUnprobed = this.mcpServers.some(s => {
 				if (!this.enabledMcpServers.has(s.name)) return false;
 				const status = this.mcpServerStatus.get(s.name);
-				return !status || (!status.tools?.length && status.status !== 'pending');
+				if (!status) return true;
+				if (status.status === 'error' || status.status === 'pending') return false;
+				return !status.tools?.length;
 			});
 			if (anyUnprobed) {
 				this.scheduleMcpToolDiscovery();
@@ -457,12 +559,21 @@ export class SidekickView extends ItemView {
 	renderWelcome(): void {
 		const welcome = this.chatContainer.createDiv({cls: 'sidekick-welcome'});
 		const icon = welcome.createDiv({cls: 'sidekick-welcome-icon'});
-		setIcon(icon, 'brain');
+		setIcon(icon, this.plugin.activeIconName || 'brain');
 		welcome.createEl('h3', {text: 'Sidekick'});
 		welcome.createEl('p', {
 			text: 'Your AI-powered second brain. Select an agent, choose a model, configure tools and get the job done!',
 			cls: 'sidekick-welcome-desc',
 		});
+	}
+
+	/** Re-render the welcome icon if the welcome screen is currently visible. */
+	refreshIcon(): void {
+		const iconEl = this.chatContainer?.querySelector('.sidekick-welcome-icon');
+		if (iconEl instanceof HTMLElement) {
+			iconEl.empty();
+			setIcon(iconEl, this.plugin.activeIconName || 'brain');
+		}
 	}
 
 	buildInputArea(parent: HTMLElement): void {
@@ -780,6 +891,12 @@ export class SidekickView extends ItemView {
 				this.mcpServers = [...mcpServers, ...agencyServers];
 			} else {
 				this.mcpServers = mcpServers;
+			}
+
+			// Inject built-in OIL server (deduplicate if user has it in mcp.json)
+			if (!this.mcpServers.some(s => s.name === OIL_SERVER_NAME)) {
+				const vaultPath = this.getVaultBasePath();
+				this.mcpServers.unshift(buildOilServerEntry(vaultPath));
 			}
 			this.prompts = prompts;
 			this.triggers = triggers;
@@ -1280,7 +1397,9 @@ export class SidekickView extends ItemView {
 			const allowed = new Set(mcpOnly);
 			this.enabledMcpServers = new Set(
 				this.mcpServers.filter(s =>
-					isAgencyService(s) ? agencyDefaults.has(s.name) : allowed.has(s.name)
+					s.name === OIL_SERVER_NAME ? true
+					: isAgencyService(s) ? agencyDefaults.has(s.name)
+					: allowed.has(s.name)
 				).map(s => s.name)
 			);
 		} else {
@@ -1351,14 +1470,6 @@ export class SidekickView extends ItemView {
 	public setScope(paths: string[]): void {
 		this.scopePaths = paths;
 		this.renderScopeBar();
-	}
-
-	/** Open the search tab with scope set to the given folder. */
-	public openSearchWithScope(folderPath: string): void {
-		this.searchWorkingDir = folderPath;
-		this.updateSearchCwdButton();
-		this.switchTab('search');
-		this.searchInputEl.focus();
 	}
 
 	/** Set the working directory programmatically. */
@@ -1438,7 +1549,17 @@ export class SidekickView extends ItemView {
 
 	buildSessionSidebar(parent: HTMLElement): void {
 		this.sidebarEl = parent.createDiv({cls: 'sidekick-sidebar'});
-		this.sidebarEl.setCssProps({'--sidebar-width': `${this.sidebarWidth}px`});
+		if (this.sidebarExpanded) this.sidebarEl.addClass('is-expanded');
+
+		// Toggle tab — always visible, sits above everything
+		this.sidebarToggleEl = this.sidebarEl.createEl('button', {
+			cls: 'sidekick-sidebar-toggle',
+			attr: {title: 'Toggle session history'},
+		});
+		const toggleIcon = this.sidebarToggleEl.createSpan({cls: 'sidekick-sidebar-toggle-icon'});
+		setIcon(toggleIcon, 'history');
+		this.sidebarToggleEl.createSpan({cls: 'sidekick-sidebar-toggle-label', text: 'History'});
+		this.sidebarToggleEl.addEventListener('click', () => this.toggleSidebar());
 
 		// Header: new session button + filter + sort + search
 		const header = this.sidebarEl.createDiv({cls: 'sidekick-sidebar-header'});
@@ -1497,47 +1618,15 @@ export class SidekickView extends ItemView {
 
 		// Session list (scrollable)
 		this.sidebarListEl = this.sidebarEl.createDiv({cls: 'sidekick-sidebar-list'});
+
+		// Apply initial collapsed/expanded visibility
+		this.renderSessionList();
 	}
 
-	initSplitter(): void {
-		let startX = 0;
-		let startWidth = 0;
-		let dragging = false;
-
-		const onMouseMove = (e: MouseEvent) => {
-			if (!dragging) return;
-			// Sidebar is on the right, so dragging left increases width
-			const dx = startX - e.clientX;
-			const newWidth = Math.max(40, Math.min(300, startWidth + dx));
-			this.sidebarWidth = newWidth;
-			this.sidebarEl.setCssProps({'--sidebar-width': `${newWidth}px`});
-		};
-
-		const onMouseUp = () => {
-			dragging = false;
-			document.removeEventListener('mousemove', onMouseMove);
-			document.removeEventListener('mouseup', onMouseUp);
-			this.splitterEl.removeClass('is-dragging');
-			document.body.removeClass('sidekick-no-select');
-			// Re-render session list once on drag end instead of every mousemove
-			this.renderSessionList();
-		};
-
-		this.splitterEl.addEventListener('mousedown', (e) => {
-			e.preventDefault();
-			dragging = true;
-			startX = e.clientX;
-			startWidth = this.sidebarWidth;
-			this.splitterEl.addClass('is-dragging');
-			document.body.addClass('sidekick-no-select');
-			document.addEventListener('mousemove', onMouseMove);
-			document.addEventListener('mouseup', onMouseUp);
-		});
-
-		this.register(() => {
-			document.removeEventListener('mousemove', onMouseMove);
-			document.removeEventListener('mouseup', onMouseUp);
-		});
+	toggleSidebar(expanded?: boolean): void {
+		this.sidebarExpanded = expanded ?? !this.sidebarExpanded;
+		this.sidebarEl.toggleClass('is-expanded', this.sidebarExpanded);
+		this.renderSessionList();
 	}
 
 	async loadSessions(): Promise<void> {
@@ -1581,7 +1670,7 @@ export class SidekickView extends ItemView {
 		if (!this.sidebarListEl) return;
 		this.sidebarListEl.empty();
 
-		const isExpanded = this.sidebarWidth > 80;
+		const isExpanded = this.sidebarExpanded;
 		// Show/hide search and filter/sort/refresh when collapsed
 		if (this.sidebarSearchEl) {
 			this.sidebarSearchEl.toggleClass('is-hidden', !isExpanded);
@@ -2671,9 +2760,9 @@ export class SidekickView extends ItemView {
 
 	/** Minimal session config for basic search — no MCP servers, skills, or custom agents. */
 	buildBasicSearchSessionConfig(): SessionConfig {
-		const permissionHandler = (request: PermissionRequest) => {
+		const permissionHandler = (request: PermissionRequest): PermissionRequestResult | Promise<PermissionRequestResult> => {
 			if (this.plugin.settings.toolApproval === 'allow') {
-				return approveAll(request, {sessionId: ''});
+				return {kind: 'approve-once'};
 			}
 			const modal = new ToolApprovalModal(this.app, request);
 			modal.open();
@@ -2838,7 +2927,9 @@ import {installTriggersPanel} from './view/triggersPanel';
 import {installSessionSidebar} from './view/sessionSidebar';
 import {installInputArea} from './view/inputArea';
 import {installConfigToolbar} from './view/configToolbar';
-import {installToolsPanel} from './view/toolsPanel';
+import {installToolsPanel, OIL_SERVER_NAME, buildOilServerEntry} from './view/toolsPanel';
+import {installPromptsPanel} from './view/promptsPanel';
+import {installSkillsPanel} from './view/skillsPanel';
 import {installChatSession} from './view/chatSession';
 import {installActiveNote} from './view/activeNote';
 import {installActionBars} from './view/actionBars';
@@ -2857,6 +2948,8 @@ installSessionSidebar(SidekickView);
 installInputArea(SidekickView);
 installConfigToolbar(SidekickView);
 installToolsPanel(SidekickView);
+installPromptsPanel(SidekickView);
+installSkillsPanel(SidekickView);
 installChatSession(SidekickView);
 installActiveNote(SidekickView);
 installActionBars(SidekickView);

@@ -1,6 +1,5 @@
 import {Modal, Notice, setIcon} from 'obsidian';
 import type SidekickPlugin from '../main';
-import {approveAll} from '../copilot';
 import type {PermissionRequest, PermissionRequestResult, UserInputRequest, UserInputResponse} from '../copilot';
 import {TASKS, TEXT_ACTION_SYSTEM_MESSAGE} from '../tasks';
 import type {TaskLabel} from '../tasks';
@@ -457,9 +456,9 @@ export class EditModal extends Modal {
 			`When asked for multiple variations, separate them with ===CHOICE=== on its own line. ` +
 			`Do not add any labels, numbers, or headings before each choice.`;
 
-		const permissionHandler = (request: PermissionRequest) => {
+		const permissionHandler = (request: PermissionRequest): PermissionRequestResult | Promise<PermissionRequestResult> => {
 			if (this.plugin.settings.toolApproval === 'allow') {
-				return approveAll(request, {sessionId: ''});
+				return {kind: 'approve-once'};
 			}
 			return new Promise<PermissionRequestResult>((resolve) => {
 				const modal = new Modal(this.app);
@@ -469,8 +468,8 @@ export class EditModal extends Modal {
 				const btnRow = modal.contentEl.createDiv({cls: 'modal-button-container'});
 				const allowBtn = btnRow.createEl('button', {text: 'Allow', cls: 'mod-cta'});
 				const denyBtn = btnRow.createEl('button', {text: 'Deny'});
-				allowBtn.addEventListener('click', () => { modal.close(); resolve({kind: 'approved'}); });
-				denyBtn.addEventListener('click', () => { modal.close(); resolve({kind: 'denied-interactively-by-user'}); });
+				allowBtn.addEventListener('click', () => { modal.close(); resolve({kind: 'approve-once'}); });
+				denyBtn.addEventListener('click', () => { modal.close(); resolve({kind: 'reject'}); });
 				modal.open();
 			});
 		};

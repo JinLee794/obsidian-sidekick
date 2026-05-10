@@ -3,6 +3,7 @@ import type {SidekickView} from '../sidekickView';
 import type {PromptConfig} from '../types';
 import {debugTrace} from '../debug';
 import {buildPrompt, buildSdkAttachments} from './sessionConfig';
+import {BUILTIN_COMMAND_DESCRIPTORS} from './builtinCommands';
 import {enrichServersWithAzureAuth} from '../mcpProbe';
 
 export function installChatSession(ViewClass: {prototype: unknown}): void {
@@ -85,7 +86,7 @@ export function installChatSession(ViewClass: {prototype: unknown}): void {
 			const spaceIdx = rawInput.indexOf(' ');
 			const cmdName = spaceIdx > 0 ? rawInput.slice(1, spaceIdx) : rawInput.slice(1);
 			const cmdArg = spaceIdx > 0 ? rawInput.slice(spaceIdx + 1).trim() : undefined;
-			const isBuiltin = (this.constructor as typeof import('../sidekickView').SidekickView).BUILTIN_COMMANDS.some(c => c.name === cmdName);
+			const isBuiltin = BUILTIN_COMMAND_DESCRIPTORS.some(c => c.name === cmdName);
 			if (isBuiltin) {
 				this.isStreaming = false;
 				this.updateSendButton();
@@ -513,6 +514,13 @@ export function installChatSession(ViewClass: {prototype: unknown}): void {
 			}),
 			session.on('subagent.deselected', () => {
 				debugTrace('subagent.deselected', {});
+			}),
+			session.on('session.compaction_start', () => {
+				debugTrace('session.compaction_start', {});
+			}),
+			session.on('session.compaction_complete', (event) => {
+				debugTrace('session.compaction_complete', event.data);
+				this.contextHintShown = false;
 			}),
 		);
 	};

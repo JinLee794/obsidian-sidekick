@@ -26,7 +26,51 @@ export function installTriggersPanel(ViewClass: {prototype: unknown}): void {
 	const proto = ViewClass.prototype as SidekickView;
 
 	proto.buildTriggersPanel = function (parent: HTMLElement): void {
-		// ── History section (top) ─────────────────────────────
+		// ── Configured triggers section (top — primary) ───────
+		const configSection = parent.createDiv({cls: 'sidekick-triggers-section sidekick-triggers-config-section'});
+		const configHeader = configSection.createDiv({cls: 'sidekick-triggers-header'});
+		configHeader.createDiv({cls: 'sidekick-triggers-title', text: 'Configured triggers'});
+
+		const configControls = configHeader.createDiv({cls: 'sidekick-triggers-controls'});
+
+		// New trigger button
+		const newTriggerBtn = configControls.createEl('button', {
+			cls: 'clickable-icon sidekick-triggers-ctrl-btn',
+			attr: {title: 'New trigger'},
+		});
+		setIcon(newTriggerBtn, 'plus');
+		newTriggerBtn.addEventListener('click', () => {
+			const triggersFolder = getTriggersFolder(this.plugin.settings);
+			new NewTriggerModal(
+				this.app,
+				this.agents,
+				this.models,
+				this.prompts,
+				triggersFolder,
+				() => void this.loadAllConfigs({silent: true}),
+			).open();
+		});
+
+		// Sort
+		const configSortBtn = configControls.createEl('button', {
+			cls: 'clickable-icon sidekick-triggers-ctrl-btn',
+			attr: {title: 'Sort triggers'},
+		});
+		setIcon(configSortBtn, 'arrow-up-down');
+		configSortBtn.addEventListener('click', (e) => {
+			const menu = new Menu();
+			menu.addItem(item => item.setTitle('Name')
+				.setChecked(this.triggerConfigSort === 'name')
+				.onClick(() => { this.triggerConfigSort = 'name'; this.renderTriggerConfigList(); }));
+			menu.addItem(item => item.setTitle('Modified date')
+				.setChecked(this.triggerConfigSort === 'modified')
+				.onClick(() => { this.triggerConfigSort = 'modified'; this.renderTriggerConfigList(); }));
+			menu.showAtMouseEvent(e);
+		});
+
+		this.triggerConfigListEl = configSection.createDiv({cls: 'sidekick-triggers-list'});
+
+		// ── History section (bottom — secondary) ──────────────
 		const historySection = parent.createDiv({cls: 'sidekick-triggers-section sidekick-triggers-history-section'});
 		const historyHeader = historySection.createDiv({cls: 'sidekick-triggers-header'});
 		historyHeader.createDiv({cls: 'sidekick-triggers-title', text: 'History'});
@@ -93,50 +137,6 @@ export function installTriggersPanel(ViewClass: {prototype: unknown}): void {
 		});
 
 		this.triggerHistoryListEl = historySection.createDiv({cls: 'sidekick-triggers-list'});
-
-		// ── Configured triggers section (bottom) ──────────────
-		const configSection = parent.createDiv({cls: 'sidekick-triggers-section sidekick-triggers-config-section'});
-		const configHeader = configSection.createDiv({cls: 'sidekick-triggers-header'});
-		configHeader.createDiv({cls: 'sidekick-triggers-title', text: 'Configured triggers'});
-
-		const configControls = configHeader.createDiv({cls: 'sidekick-triggers-controls'});
-
-		// New trigger button
-		const newTriggerBtn = configControls.createEl('button', {
-			cls: 'clickable-icon sidekick-triggers-ctrl-btn',
-			attr: {title: 'New trigger'},
-		});
-		setIcon(newTriggerBtn, 'plus');
-		newTriggerBtn.addEventListener('click', () => {
-			const triggersFolder = getTriggersFolder(this.plugin.settings);
-			new NewTriggerModal(
-				this.app,
-				this.agents,
-				this.models,
-				this.prompts,
-				triggersFolder,
-				() => void this.loadAllConfigs({silent: true}),
-			).open();
-		});
-
-		// Sort
-		const configSortBtn = configControls.createEl('button', {
-			cls: 'clickable-icon sidekick-triggers-ctrl-btn',
-			attr: {title: 'Sort triggers'},
-		});
-		setIcon(configSortBtn, 'arrow-up-down');
-		configSortBtn.addEventListener('click', (e) => {
-			const menu = new Menu();
-			menu.addItem(item => item.setTitle('Name')
-				.setChecked(this.triggerConfigSort === 'name')
-				.onClick(() => { this.triggerConfigSort = 'name'; this.renderTriggerConfigList(); }));
-			menu.addItem(item => item.setTitle('Modified date')
-				.setChecked(this.triggerConfigSort === 'modified')
-				.onClick(() => { this.triggerConfigSort = 'modified'; this.renderTriggerConfigList(); }));
-			menu.showAtMouseEvent(e);
-		});
-
-		this.triggerConfigListEl = configSection.createDiv({cls: 'sidekick-triggers-list'});
 	};
 
 	proto.renderTriggerHistory = function (): void {

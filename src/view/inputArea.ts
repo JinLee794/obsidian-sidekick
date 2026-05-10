@@ -2,6 +2,7 @@ import {MarkdownView, Menu, Notice, TFile, TFolder, normalizePath, setIcon} from
 import type {SidekickView} from '../sidekickView';
 import type {PromptConfig, SelectionInfo} from '../types';
 import {VaultScopeModal} from '../modals/vaultScopeModal';
+import {BUILTIN_COMMAND_DESCRIPTORS} from './builtinCommands';
 
 declare module '../sidekickView' {
 	interface SidekickView {
@@ -26,7 +27,6 @@ declare module '../sidekickView' {
 		updatePromptDropdownSelection(): void;
 		selectPromptFromDropdown(): void;
 		setScope(paths: string[]): void;
-		openSearchWithScope(folderPath: string): void;
 		setWorkingDir(folderPath: string): void;
 		setPromptText(text: string): void;
 		addSelectionAttachment(text: string, info: SelectionInfo): void;
@@ -635,8 +635,7 @@ export function installInputArea(ViewClass: {prototype: unknown}): void {
 		const query = value.slice(1).toLowerCase();
 
 		// Merge built-in commands with user-defined prompts
-		const builtinCommands = (this.constructor as {BUILTIN_COMMANDS?: Array<{name: string; description: string}>}).BUILTIN_COMMANDS ?? [];
-		const builtinMatches = builtinCommands
+		const builtinMatches = BUILTIN_COMMAND_DESCRIPTORS
 			.filter(c => c.name.toLowerCase().includes(query))
 			.map(c => ({name: c.name, description: c.description, content: '', isBuiltin: true as const}));
 		const promptMatches = this.prompts
@@ -767,14 +766,6 @@ export function installInputArea(ViewClass: {prototype: unknown}): void {
 	proto.setScope = function (paths: string[]): void {
 		this.scopePaths = paths;
 		this.renderScopeBar();
-	};
-
-	/** Open the search tab with scope set to the given folder. */
-	proto.openSearchWithScope = function (folderPath: string): void {
-		this.searchWorkingDir = folderPath;
-		this.updateSearchCwdButton();
-		this.switchTab('search');
-		this.searchInputEl.focus();
 	};
 
 	/** Set the working directory programmatically. */

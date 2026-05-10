@@ -1,9 +1,10 @@
-import {App, Modal, Notice, PluginSettingTab, Setting, normalizePath} from "obsidian";
+import {App, Modal, Notice, PluginSettingTab, Setting, normalizePath, setIcon} from "obsidian";
 import SidekickPlugin from "./main";
 import type {ModelInfo, ProviderConfig} from "./copilot";
 import type {McpInputVariable} from "./types";
 import {loadMcpInputs, loadAgents} from "./configLoader";
 import {loadSecureField, saveSecureField, loadMcpSecret, saveMcpSecret, deleteMcpSecret, resolveEnvRef, isEnvRef} from "./secureStorage";
+import {ICON_PRESETS, CUSTOM_ICON_SETTING_VALUE, DEFAULT_ICON_NAME, MAX_CUSTOM_ICON_BYTES, readPngAsDataUrl} from "./sidekickIcon";
 
 const DEFAULT_COPILOT_LOCATION = '';
 
@@ -70,6 +71,10 @@ export interface SidekickSettings {
 	telegramAllowedUsers: string;
 	/** Default agent for Telegram bot sessions. */
 	telegramDefaultAgent: string;
+	/** Lucide icon name shown for Sidekick (ribbon, view tab, welcome). 'custom' uses sidekickCustomIcon. */
+	sidekickIcon: string;
+	/** Base64 data URL of a user-uploaded PNG, used when sidekickIcon === 'custom'. */
+	sidekickCustomIcon: string;
 }
 
 /** Persisted preferences for the Edit modal form. */
@@ -125,6 +130,8 @@ export const DEFAULT_SETTINGS: SidekickSettings = {
 	telegramBotToken: '',
 	telegramAllowedUsers: '',
 	telegramDefaultAgent: '',
+	sidekickIcon: DEFAULT_ICON_NAME,
+	sidekickCustomIcon: '',
 }
 
 /** Fields stored in vault-specific local storage instead of data.json. */
@@ -385,6 +392,7 @@ Example — refresh an Azure access token and store it in the \`workiq-token\` i
 | \`/agent <name>\` | Switch agent |
 | \`/clear\` | Clear conversation and start fresh |
 | \`/new\` | Start a new conversation (keeps history) |
+| \`/compact\` | Summarize conversation history to reduce context usage |
 | \`/trigger-debug\` | Show trigger diagnostic info |
 | \`/tasks\` | Show active and recent tasks |
 
@@ -733,7 +741,7 @@ export class SidekickSettingTab extends PluginSettingTab {
 							throw new Error('Copilot service is not available');
 						}
 						const testSession = await this.plugin.copilot.createSession({
-							onPermissionRequest: () => ({allow: false, kind: 'denied-interactively-by-user' as const}),
+							onPermissionRequest: () => ({kind: 'reject' as const}),
 							...(this.plugin.settings.providerModel ? {model: this.plugin.settings.providerModel} : {}),
 							...(this.plugin.settings.providerPreset !== 'github' && this.plugin.settings.providerBaseUrl
 								? {provider: (() => {
@@ -858,6 +866,8 @@ export class SidekickSettingTab extends PluginSettingTab {
 						new Notice(`Failed to initialize sidekick folder: ${String(e)}`);
 					}
 				}));
+
+		this.renderIconSetting(capPanel);
 
 		new Setting(capPanel)
 			.setName('Enable ghost-text autocomplete')
@@ -1111,6 +1121,96 @@ export class SidekickSettingTab extends PluginSettingTab {
 				await this.plugin.saveSettings();
 			});
 		});
+	}
+
+	/** Render the icon picker (Lucide preset or PNG upload) inside the given panel. */
+	private renderIconSetting(panel: HTMLElement): void {
+		const presetValues = new Set(ICON_PRESETS.map(p => p.value));
+		const current = this.plugin.settings.sidekickIcon || DEFAULT_ICON_NAME;
+		const initialIsCustom = current === CUSTOM_ICON_SETTING_VALUE;
+
+		const setting = new Setting(panel)
+			.setName('Sidekick icon')
+			.setDesc('Icon shown for the ribbon button, view tab and welcome screen.');
+
+		const previewEl = setting.controlEl.createSpan({cls: 'sidekick-icon-preview'});
+		previewEl.style.display = 'inline-flex';
+		previewEl.style.alignItems = 'center';
+		previewEl.style.justifyContent = 'center';
+		previewEl.style.width = '24px';
+		previewEl.style.height = '24px';
+		previewEl.style.marginRight = '8px';
+
+		const refreshPreview = () => {
+			previewEl.empty();
+			const name = this.plugin.activeIconName;
+			if (name) setIcon(previewEl, name);
+		};
+		refreshPreview();
+
+		setting.addDropdown(dropdown => {
+			for (const {value, label} of ICON_PRESETS) {
+				dropdown.addOption(value, label);
+			}
+			dropdown.addOption(CUSTOM_ICON_SETTING_VALUE, 'Custom (upload PNG)…');
+			dropdown.setValue(initialIsCustom || presetValues.has(current) ? current : DEFAULT_ICON_NAME);
+			dropdown.onChange(async (value) => {
+				this.plugin.settings.sidekickIcon = value;
+				await this.plugin.saveSettings();
+				this.plugin.applyIcon();
+				refreshPreview();
+				renderUploadRow();
+			});
+		});
+
+		// Upload row, only visible when "custom" is selected.
+		const uploadRow = panel.createDiv({cls: 'sidekick-icon-upload-row setting-item-description'});
+		uploadRow.style.marginLeft = 'calc(var(--size-4-2, 8px) * 2)';
+		uploadRow.style.marginBottom = 'var(--size-4-4, 16px)';
+
+		const renderUploadRow = () => {
+			uploadRow.empty();
+			if (this.plugin.settings.sidekickIcon !== CUSTOM_ICON_SETTING_VALUE) {
+				uploadRow.style.display = 'none';
+				return;
+			}
+			uploadRow.style.display = 'block';
+
+			const hint = uploadRow.createDiv();
+			hint.setText(`Upload a square PNG (max ${Math.round(MAX_CUSTOM_ICON_BYTES / 1024)} KB). It will be downscaled to 64×64.`);
+
+			const fileInput = uploadRow.createEl('input', {type: 'file'});
+			fileInput.accept = 'image/png';
+			fileInput.addEventListener('change', async () => {
+				const file = fileInput.files?.[0];
+				if (!file) return;
+				try {
+					const dataUrl = await readPngAsDataUrl(file);
+					this.plugin.settings.sidekickCustomIcon = dataUrl;
+					await this.plugin.saveSettings();
+					this.plugin.applyIcon();
+					refreshPreview();
+					new Notice('Sidekick icon updated.');
+				} catch (e) {
+					new Notice(`Failed to load icon: ${(e as Error).message}`);
+				} finally {
+					fileInput.value = '';
+				}
+			});
+
+			if (this.plugin.settings.sidekickCustomIcon) {
+				const clearBtn = uploadRow.createEl('button', {text: 'Clear custom icon'});
+				clearBtn.style.marginLeft = '8px';
+				clearBtn.addEventListener('click', async () => {
+					this.plugin.settings.sidekickCustomIcon = '';
+					this.plugin.settings.sidekickIcon = DEFAULT_ICON_NAME;
+					await this.plugin.saveSettings();
+					this.plugin.applyIcon();
+					this.display();
+				});
+			}
+		};
+		renderUploadRow();
 	}
 }
 

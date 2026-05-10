@@ -9,14 +9,15 @@ import type {
 	GetAuthStatusResponse,
 	AssistantMessageEvent,
 	MCPServerConfig,
-	MCPRemoteServerConfig,
-	MCPLocalServerConfig,
 	SessionEvent,
 	SessionEventType,
 	MessageOptions,
 	PermissionRequest,
 	PermissionRequestResult,
 	PermissionHandler,
+	CommandDefinition,
+	CommandHandler,
+	CommandContext,
 	Tool,
 } from '@github/copilot-sdk';
 import type {ProviderConfig, UserInputHandler, UserInputRequest, UserInputResponse, ReasoningEffort} from '@github/copilot-sdk/dist/types';
@@ -184,7 +185,7 @@ export class CopilotService {
 			// Remote mode — connect to existing server
 			return new CopilotClient({
 				cliUrl: this.cliUrl,
-				...(this.githubToken ? {githubToken: this.githubToken} : {}),
+				...(this.githubToken ? {gitHubToken: this.githubToken} : {}),
 			});
 		}
 		// Local mode — spawn CLI process
@@ -194,7 +195,7 @@ export class CopilotService {
 			...(cliPath ? {cliPath} : {}),
 			cwd: os.homedir(),
 			env: cleanEnv(),
-			...(this.githubToken ? {githubToken: this.githubToken} : {}),
+			...(this.githubToken ? {gitHubToken: this.githubToken} : {}),
 			...(this.useLoggedInUser !== undefined ? {useLoggedInUser: this.useLoggedInUser} : {}),
 		});
 	}
@@ -328,7 +329,7 @@ export class CopilotService {
 			...(options.onUserInputRequest ? {onUserInputRequest: options.onUserInputRequest} : {}),
 			customAgents: options.customAgents,
 			...(options.systemMessage
-				? {systemMessage: {content: options.systemMessage}}
+				? {systemMessage: {mode: 'append' as const, content: options.systemMessage}}
 				: {}),
 		});
 		try {
@@ -365,7 +366,7 @@ export class CopilotService {
 			...(options.onUserInputRequest ? {onUserInputRequest: options.onUserInputRequest} : {}),
 			customAgents: options.customAgents,
 			...(options.systemMessage
-				? {systemMessage: {content: options.systemMessage}}
+				? {systemMessage: {mode: 'append' as const, content: options.systemMessage}}
 				: {}),
 		});
 		const response: AssistantMessageEvent | undefined =
@@ -412,14 +413,15 @@ export type {
 	AssistantMessageEvent,
 	SessionConfig,
 	MCPServerConfig,
-	MCPRemoteServerConfig,
-	MCPLocalServerConfig,
 	SessionEvent,
 	SessionEventType,
 	MessageOptions,
 	PermissionRequest,
 	PermissionRequestResult,
 	PermissionHandler,
+	CommandDefinition,
+	CommandHandler,
+	CommandContext,
 	Tool,
 	UserInputHandler,
 	UserInputRequest,
