@@ -5,6 +5,18 @@ All notable changes to the Sidekick plugin are documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/),
 and this project adheres to [Semantic Versioning](https://semver.org/).
 
+## [1.2.7-jinle] - 2026-05-09
+
+### Fixed
+
+- **Windows compatibility for CLI auth flows**: Standardized subprocess environment setup so `gh`, `az`, and agency tooling resolve correctly on Windows. Fixed PATH delimiter handling (`;` on Windows vs `:` on macOS/Linux), home-directory lookup (`USERPROFILE` fallback), and Windows executable resolution with `.exe` suffix.
+- **Cross-platform process spawning**: Updated CLI execution paths to use Windows-safe spawn options for auth and probing operations, reducing failures when running in Electron on Windows.
+- **Absolute path construction on Windows**: Replaced several string-concatenated filesystem paths with `path.join`-based joins for plugin directory, attachment paths, and working-directory resolution.
+
+### Added
+
+- **`platformEnv` helper module** (`src/platformEnv.ts`): Centralized OS-aware PATH, executable suffix, home-directory, and spawn-env logic used across Copilot, MCP probing, and tools auth refresh flows.
+
 ## [1.2.6-jinle] - 2026-04-05
 
 ### Changed
